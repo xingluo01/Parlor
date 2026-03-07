@@ -1,0 +1,413 @@
+import { useState, useEffect } from 'react';
+import { generateUUID } from '../../utils/uuid';
+import {
+  Plus,
+  Edit3,
+  Trash2,
+  ChevronDown,
+  ChevronRight,
+  Save,
+  ToggleLeft,
+  ToggleRight,
+  BookOpen,
+  X,
+} from 'lucide-react';
+import { Button, Input, Modal, ConfirmDialog, Textarea } from '../../components/ui';
+import { worldInfoOps } from '../../db';
+import type { WorldInfo, LorebookEntry } from '../../types';
+
+// Entry editor modal
+function EntryModal({
+  isOpen,
+  onClose,
+  entry,
+  onSave,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  entry: LorebookEntry | null;
+  onSave: (data: Omit<LorebookEntry, 'id'>) => Promise<void>;
+}) {
+  const [keywords, setKeywords] = useState('');
+  const [content, setContent] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [insertionOrder, setInsertionOrder] = useState(100);
+
+  useEffect(() => {
+    if (isOpen) {
+      if (entry) {
+        setKeywords(entry.keywords.join(', '));
+        setContent(entry.content);
+        setEnabled(entry.enabled);
+        setCaseSensitive(entry.caseSensitive ?? false);
+        setInsertionOrder(entry.insertionOrder);
+      } else {
+        setKeywords('');
+        setContent('');
+        setEnabled(true);
+        setCaseSensitive(false);
+        setInsertionOrder(100);
+      }
+    }
+  }, [entry, isOpen]);
+
+  const canSave = keywords.trim() !== '' && content.trim() !== '';
+
+  const handleSave = async () => {
+    if (!canSave) return;
+    await onSave({
+      keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
+      content: content.trim(),
+      enabled,
+      caseSensitive,
+      insertionOrder,
+    });
+  };
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={entry ? 'Edit Entry' : 'New Entry'}
+      size="md"
+    >
+      <div className="space-y-4">
+        <Input
+          label="Keywords (comma-separated)"
+          value={keywords}
+          onChange={(e) => setKeywords(e.target.value)}
+          placeholder="e.g. dragon, fire drake, wyrm"
+        />
+        <Textarea
+          label="Content"
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          placeholder="Content injected when keywords are found in context…"
+          rows={5}
+        />
+        <div className="flex items-center gap-6">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+              className="rounded border-glass-border bg-dark-100 text-parlor-500"
+            />
+            <span className="text-sm text-gray-300">Enabled</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={caseSensitive}
+              onChange={(e) => setCaseSensitive(e.target.checked)}
+              className="rounded border-glass-border bg-dark-100 text-parlor-500"
+            />
+            <span className="text-sm text-gray-300">Case sensitive</span>
+          </label>
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="text-sm font-medium text-gray-300 w-36">Insertion order</label>
+          <input
+            type="number"
+            value={insertionOrder}
+            onChange={(e) => setInsertionOrder(Number(e.target.value))}
+            className="w-24 px-3 py-1.5 rounded-lg bg-dark-100 border border-glass-border text-white text-sm focus:outline-none focus:border-parlor-500/50"
+          />
+        </div>
+        <div className="flex justify-end gap-3 pt-2">
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={!canSave}>
+            <Save className="w-4 h-4" />
+            Save
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+export function WorldInfoSettings({
+  books,
+  onRefresh,
+}: {
+  books: WorldInfo[];
+  onRefresh: () => void;
+}) {
+  const [expandedBookId, setExpandedBookId] = useState<string | null>(null);
+  const [editingEntry, setEditingEntry] = useState<{ bookId: string; entry: LorebookEntry | null } | null>(null);
+  const [deleteBookConfirm, setDeleteBookConfirm] = useState<string | null>(null);
+  const [deleteEntryConfirm, setDeleteEntryConfirm] = useState<{ bookId: string; entryId: string } | null>(null);
+  const [newBookName, setNewBookName] = useState('');
+  const [showNewBook, setShowNewBook] = useState(false);
+
+  const handleCreateBook = async () => {
+    const name = newBookName.trim();
+    if (!name) return;
+    await worldInfoOps.add({
+      id: generateUUID(),
+      name,
+      enabled: true,
+      entries: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    setNewBookName('');
+    setShowNewBook(false);
+    onRefresh();
+  };
+
+  const handleToggleBook = async (id: string, enabled: boolean) => {
+    await worldInfoOps.update(id, { enabled });
+    onRefresh();
+  };
+
+  const handleDeleteBook = async (id: string) => {
+    await worldInfoOps.delete(id);
+    if (expandedBookId === id) setExpandedBookId(null);
+    onRefresh();
+  };
+
+  const handleSaveEntry = async (bookId: string, entryData: Omit<LorebookEntry, 'id'>, existingId?: string) => {
+    const book = books.find(b => b.id === bookId);
+    if (!book) return;
+    const entry: LorebookEntry = { id: existingId || generateUUID(), ...entryData };
+    const entries = existingId
+      ? book.entries.map(e => e.id === existingId ? entry : e)
+      : [...book.entries, entry];
+    await worldInfoOps.update(bookId, { entries });
+    onRefresh();
+  };
+
+  const handleDeleteEntry = async (bookId: string, entryId: string) => {
+    const book = books.find(b => b.id === bookId);
+    if (!book) return;
+    await worldInfoOps.update(bookId, { entries: book.entries.filter(e => e.id !== entryId) });
+    onRefresh();
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold text-white font-serif tracking-tight">World Info</h2>
+        <Button
+          size="sm"
+          onClick={() => setShowNewBook(true)}
+        >
+          <Plus className="w-4 h-4" />
+          New Book
+        </Button>
+      </div>
+
+      <p className="text-gray-500 text-sm mb-4">
+        World Info books inject lore into the context when keywords appear in the conversation.
+        Books can be toggled globally here, or per-chat from the chat header.
+      </p>
+
+      {/* New book inline form */}
+      {showNewBook && (
+        <div className="mb-4 p-4 bg-dark-200 border border-parlor-500/30 rounded-lg flex items-center gap-3">
+          <BookOpen className="w-4 h-4 text-parlor-400 flex-shrink-0" />
+          <Input
+            value={newBookName}
+            onChange={(e) => setNewBookName(e.target.value)}
+            placeholder="Book name…"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleCreateBook();
+              if (e.key === 'Escape') { setShowNewBook(false); setNewBookName(''); }
+            }}
+            autoFocus
+            className="flex-1"
+          />
+          <Button size="sm" onClick={handleCreateBook} disabled={!newBookName.trim()}>
+            Create
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => { setShowNewBook(false); setNewBookName(''); }}
+          >
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+      )}
+
+      {books.length === 0 ? (
+        <div className="text-center py-8">
+          <BookOpen className="w-8 h-8 text-gray-600 mx-auto mb-2" />
+          <p className="text-gray-500">No World Info books yet. Create one to get started.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {books.map((book) => {
+            const isExpanded = expandedBookId === book.id;
+            const enabledEntries = book.entries.filter(e => e.enabled).length;
+
+            return (
+              <div
+                key={book.id}
+                className="bg-dark-200 border border-glass-border rounded-lg overflow-hidden"
+              >
+                {/* Book header row */}
+                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <button
+                      onClick={async () => handleToggleBook(book.id, !book.enabled)}
+                      className="flex-shrink-0 text-gray-400 hover:text-white transition-colors"
+                      title={book.enabled ? 'Disable globally' : 'Enable globally'}
+                    >
+                      {book.enabled
+                        ? <ToggleRight className="w-5 h-5 text-parlor-400" />
+                        : <ToggleLeft className="w-5 h-5" />}
+                    </button>
+                    <span className={`font-medium truncate ${book.enabled ? 'text-white' : 'text-gray-500'}`}>
+                      {book.name}
+                    </span>
+                    <span className="text-xs text-gray-500 flex-shrink-0">
+                      {enabledEntries}/{book.entries.length} entries
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setExpandedBookId(isExpanded ? null : book.id)}
+                      title={isExpanded ? 'Collapse' : 'Edit entries'}
+                    >
+                      {isExpanded
+                        ? <ChevronDown className="w-4 h-4" />
+                        : <ChevronRight className="w-4 h-4" />}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setDeleteBookConfirm(book.id)}
+                    >
+                      <Trash2 className="w-4 h-4 text-red-400" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Expanded entries section */}
+                {isExpanded && (
+                  <div className="border-t border-glass-border">
+                    <div className="p-3 flex items-center justify-between">
+                      <span className="text-xs text-gray-500 uppercase tracking-wider">Entries</span>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setEditingEntry({ bookId: book.id, entry: null })}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add Entry
+                      </Button>
+                    </div>
+
+                    {book.entries.length === 0 ? (
+                      <div className="px-4 pb-4 text-sm text-gray-500 text-center">
+                        No entries yet. Add one to inject lore when keywords match.
+                      </div>
+                    ) : (
+                      <div className="space-y-2 px-3 pb-3">
+                        {book.entries.map((entry) => (
+                          <div
+                            key={entry.id}
+                            className="flex items-start justify-between gap-3 bg-dark-100 rounded-lg px-3 py-2.5"
+                          >
+                            <div className="flex items-start gap-2 min-w-0 flex-1">
+                              <button
+                                onClick={async () => {
+                                  const updated = { ...entry, enabled: !entry.enabled };
+                                  const entries = book.entries.map(e => e.id === entry.id ? updated : e);
+                                  await worldInfoOps.update(book.id, { entries });
+                                  onRefresh();
+                                }}
+                                className="mt-0.5 flex-shrink-0 text-gray-400 hover:text-white transition-colors"
+                              >
+                                {entry.enabled
+                                  ? <ToggleRight className="w-4 h-4 text-parlor-400" />
+                                  : <ToggleLeft className="w-4 h-4" />}
+                              </button>
+                              <div className="min-w-0">
+                                <div className="text-xs text-parlor-300 font-mono truncate">
+                                  {entry.keywords.join(', ')}
+                                </div>
+                                <div className="text-xs text-gray-400 mt-0.5 line-clamp-2">
+                                  {entry.content}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setEditingEntry({ bookId: book.id, entry })}
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setDeleteEntryConfirm({ bookId: book.id, entryId: entry.id })}
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Entry editor modal */}
+      <EntryModal
+        isOpen={!!editingEntry}
+        onClose={() => setEditingEntry(null)}
+        entry={editingEntry?.entry ?? null}
+        onSave={async (data) => {
+          if (!editingEntry) return;
+          await handleSaveEntry(editingEntry.bookId, data, editingEntry.entry?.id);
+          setEditingEntry(null);
+        }}
+      />
+
+      {/* Delete book confirm */}
+      <ConfirmDialog
+        isOpen={!!deleteBookConfirm}
+        onClose={() => setDeleteBookConfirm(null)}
+        onConfirm={async () => {
+          if (deleteBookConfirm) {
+            await handleDeleteBook(deleteBookConfirm);
+            setDeleteBookConfirm(null);
+          }
+        }}
+        title="Delete Book"
+        message="Are you sure you want to delete this World Info book and all its entries?"
+        confirmText="Delete"
+        variant="danger"
+      />
+
+      {/* Delete entry confirm */}
+      <ConfirmDialog
+        isOpen={!!deleteEntryConfirm}
+        onClose={() => setDeleteEntryConfirm(null)}
+        onConfirm={async () => {
+          if (deleteEntryConfirm) {
+            await handleDeleteEntry(deleteEntryConfirm.bookId, deleteEntryConfirm.entryId);
+            setDeleteEntryConfirm(null);
+          }
+        }}
+        title="Delete Entry"
+        message="Are you sure you want to delete this lore entry?"
+        confirmText="Delete"
+        variant="danger"
+      />
+    </div>
+  );
+}
