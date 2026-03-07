@@ -352,5 +352,13 @@ app.listen(PORT, '0.0.0.0', () => {
   const mode = fs.existsSync(distPath) ? 'production' : 'API-only';
   console.log(`\n🚀 Parlor running in ${mode} mode on port ${PORT}`);
   console.log(`📡 Connect from devices using: http://<your-ip>:${PORT}`);
+
+  // Auto-open in browser
+  const url = `http://localhost:${PORT}`;
+  const { exec } = require('child_process');
+  const platform = process.platform;
+  if (platform === 'win32') exec(`start "" "${url}"`);
+  else if (platform === 'darwin') exec(`open "${url}"`);
+  else exec(`xdg-open "${url}"`);
   console.log(`💻 Local access: http://localhost:${PORT}\n`);
 });
