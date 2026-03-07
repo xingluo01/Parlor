@@ -348,7 +348,7 @@ if (fs.existsSync(distPath)) {
 
 // Start server
 initializeStorage();
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   const mode = fs.existsSync(distPath) ? 'production' : 'API-only';
   console.log(`\n🚀 Parlor running in ${mode} mode on port ${PORT}`);
   console.log(`📡 Connect from devices using: http://<your-ip>:${PORT}`);
@@ -361,4 +361,15 @@ app.listen(PORT, '0.0.0.0', () => {
   else if (platform === 'darwin') exec(`open "${url}"`);
   else exec(`xdg-open "${url}"`);
   console.log(`💻 Local access: http://localhost:${PORT}\n`);
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n❌ Port ${PORT} is already in use.`);
+    console.error(`   Another instance of Parlor may be running.`);
+    console.error(`   Stop it first, or use a different port: PORT=3002 node server.cjs\n`);
+  } else {
+    console.error('\n❌ Server error:', err.message);
+  }
+  process.exit(1);
 });

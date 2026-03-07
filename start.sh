@@ -30,12 +30,18 @@ if [ ! -d "node_modules" ]; then
     echo ""
 fi
 
-# Build if dist/ doesn't exist
-if [ ! -d "dist" ]; then
-    echo "  Building Parlor..."
-    echo ""
-    npm run build
-    echo ""
+# Build frontend (always rebuild to pick up any source changes)
+echo "  Building Parlor..."
+echo ""
+npm run build
+echo ""
+
+# Kill any existing server on port 3001
+EXISTING_PID=$(lsof -ti:3001 2>/dev/null || netstat -ano 2>/dev/null | grep ':3001.*LISTEN' | awk '{print $NF}')
+if [ -n "$EXISTING_PID" ]; then
+    echo "  Stopping previous server (PID $EXISTING_PID)..."
+    kill "$EXISTING_PID" 2>/dev/null || taskkill //F //PID "$EXISTING_PID" 2>/dev/null
+    sleep 1
 fi
 
 # Start the server

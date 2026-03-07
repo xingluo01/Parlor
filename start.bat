@@ -39,18 +39,23 @@ if not exist node_modules (
     echo.
 )
 
-:: Build if dist/ doesn't exist
-if not exist dist (
-    echo  Building Parlor...
+:: Build frontend (always rebuild to pick up any source changes)
+echo  Building Parlor...
+echo.
+call npm run build
+if %errorlevel% neq 0 (
     echo.
-    call npm run build
-    if %errorlevel% neq 0 (
-        echo.
-        echo  [ERROR] Build failed.
-        pause
-        exit /b 1
-    )
-    echo.
+    echo  [ERROR] Build failed.
+    pause
+    exit /b 1
+)
+echo.
+
+:: Kill any existing server on port 3001
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":3001.*LISTENING" 2^>nul') do (
+    echo  Stopping previous server (PID %%p^)...
+    taskkill /F /PID %%p >nul 2>nul
+    timeout /t 1 /nobreak >nul
 )
 
 :: Start the server
