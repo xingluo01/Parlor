@@ -8,6 +8,7 @@ import {
   Code,
   BookOpen,
   Palette,
+  RefreshCw,
 } from 'lucide-react';
 import { backupOps, connectionOps, presetOps, regexOps, settingsOps, worldInfoOps } from '../db';
 import { saveAs } from 'file-saver';
@@ -20,8 +21,9 @@ import { BackupSettings } from './settings/BackupSettings';
 import { GeneralSettings } from './settings/GeneralSettings';
 import { WorldInfoSettings } from './settings/WorldInfoSettings';
 import { ThemeSettings } from './settings/ThemeSettings';
+import { SyncSettings } from './settings/SyncSettings';
 
-type SettingsTab = 'connection' | 'presets' | 'regex' | 'worldInfo' | 'backup' | 'general' | 'theme';
+type SettingsTab = 'connection' | 'presets' | 'regex' | 'worldInfo' | 'backup' | 'general' | 'theme' | 'sync';
 
 export function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('connection');
@@ -88,6 +90,7 @@ export function SettingsPage() {
     { id: 'worldInfo' as const, label: 'World Info', icon: BookOpen },
     { id: 'backup' as const, label: 'Backup', icon: Download },
     { id: 'theme' as const, label: 'Theme', icon: Palette },
+    { id: 'sync' as const, label: 'Sync', icon: RefreshCw },
     { id: 'general' as const, label: 'General', icon: SettingsIcon },
   ];
 
@@ -211,6 +214,16 @@ export function SettingsPage() {
             )}
             {activeTab === 'theme' && (
               <ThemeSettings
+                settings={settings}
+                onUpdate={async (updates) => {
+                  await settingsOps.update(updates);
+                  const updated = await settingsOps.get();
+                  setSettings(updated || null);
+                }}
+              />
+            )}
+            {activeTab === 'sync' && (
+              <SyncSettings
                 settings={settings}
                 onUpdate={async (updates) => {
                   await settingsOps.update(updates);

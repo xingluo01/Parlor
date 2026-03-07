@@ -168,7 +168,7 @@ export function ChatPageHeader({
     : null;
 
   return (
-    <div className="flex-shrink-0 border-b border-glass-border bg-dark-200/90 backdrop-blur-md relative z-10">
+    <div className="flex-shrink-0 border-b border-glass-border bg-dark-200/90 backdrop-blur-md relative z-10 safe-top">
       <div className="flex items-center justify-between px-2 h-14 sm:h-14">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <Button variant="ghost" size="sm" onClick={() => navigate('/chats')} className="p-1.5">

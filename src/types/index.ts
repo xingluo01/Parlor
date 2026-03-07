@@ -348,6 +348,12 @@ export type AppSettings = {
 
   // Image Generation
   imageGen?: ImageGenSettings;
+
+  // Sync
+  syncEnabled?: boolean;
+  syncRemoteUrl?: string; // e.g. "http://192.168.1.100:3001"
+  syncIntervalMinutes?: number; // auto-sync interval (0 = manual only)
+  lastSyncAt?: number;
 }
 
 // Export/Import Types

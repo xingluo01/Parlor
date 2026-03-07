@@ -24,6 +24,8 @@ const FILES = {
   regexes: path.join(DATA_DIR, 'regexes.json'),
   lorebook: path.join(DATA_DIR, 'lorebook.json'),
   worldInfo: path.join(DATA_DIR, 'world-info.json'),
+  groupChats: path.join(DATA_DIR, 'group-chats.json'),
+  databank: path.join(DATA_DIR, 'databank.json'),
 };
 
 // Middleware - restrict CORS to localhost and LAN origins
@@ -332,6 +334,68 @@ app.get('/api/status', (req, res) => {
     timestamp: Date.now(),
     dataTypes: Object.keys(FILES),
   });
+});
+
+// GET /api/sync/manifest - Returns {type: [{id, updatedAt}]} for sync
+app.get('/api/sync/manifest', (req, res) => {
+  const manifest = {};
+  for (const type of Object.keys(FILES)) {
+    const data = readData(type);
+    if (Array.isArray(data)) {
+      manifest[type] = data.map(item => ({ id: item.id, updatedAt: item.updatedAt || 0 }));
+    }
+  }
+  res.json(manifest);
+});
+
+// POST /api/sync/pull - Given {type: [id, ...]} returns {type: [fullItem, ...]}
+app.post('/api/sync/pull', (req, res) => {
+  const request = req.body; // { characters: ["id1","id2"], chats: ["id3"], ... }
+  const result = {};
+  for (const [type, ids] of Object.entries(request)) {
+    if (!FILES[type] || !Array.isArray(ids)) continue;
+    const data = readData(type);
+    if (!Array.isArray(data)) continue;
+    const idSet = new Set(ids);
+    let items = data.filter(item => idSet.has(item.id));
+    // Inject avatars for characters
+    if (type === 'characters') {
+      items = items.map(item => {
+        const avatar = readAvatar(item.id);
+        return avatar ? { ...item, avatar } : item;
+      });
+    }
+    result[type] = items;
+  }
+  res.json(result);
+});
+
+// POST /api/sync/push - Merge incoming items by updatedAt (newer wins)
+app.post('/api/sync/push', (req, res) => {
+  const incoming = req.body; // { characters: [fullItem, ...], chats: [...], ... }
+  const stats = {};
+  for (const [type, items] of Object.entries(incoming)) {
+    if (!FILES[type] || !Array.isArray(items)) continue;
+    const existing = readData(type) || [];
+    const existingMap = new Map(existing.map(i => [i.id, i]));
+    let added = 0, updated = 0;
+    for (const item of items) {
+      if (!item || !item.id) continue;
+      const local = existingMap.get(item.id);
+      if (!local) {
+        existingMap.set(item.id, item);
+        added++;
+      } else if ((item.updatedAt || 0) > (local.updatedAt || 0)) {
+        existingMap.set(item.id, { ...local, ...item });
+        updated++;
+      }
+    }
+    if (added > 0 || updated > 0) {
+      writeData(type, Array.from(existingMap.values()));
+    }
+    stats[type] = { added, updated };
+  }
+  res.json({ success: true, stats });
 });
 
 // Serve built frontend in production (when dist/ exists)

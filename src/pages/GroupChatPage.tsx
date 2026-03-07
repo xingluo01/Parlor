@@ -508,7 +508,7 @@ export function GroupChatPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex-shrink-0 border-b border-glass-border bg-dark-200/50 backdrop-blur-sm relative z-10">
+      <div className="flex-shrink-0 border-b border-glass-border bg-dark-200/50 backdrop-blur-sm relative z-10 safe-top">
         <div className="flex items-center justify-between px-2 h-14 sm:h-16">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <Button variant="ghost" size="sm" onClick={() => navigate('/chats')}>

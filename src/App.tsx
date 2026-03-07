@@ -4,6 +4,7 @@ import { Layout } from './components/layout';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { initializeDatabase, settingsOps } from './db';
 import { applyTheme, getTheme } from './utils/themes';
+import { startAutoSync } from './services/sync';
 
 // Lazy-load route-level components for smaller initial bundle
 const HomePage = lazy(() => import('./pages/HomePage'));
@@ -35,6 +36,10 @@ function App() {
       settingsOps.get().then(s => {
         if (s?.activeTheme) {
           applyTheme(getTheme(s.activeTheme, s.customTheme));
+        }
+        // Start auto-sync if configured
+        if (s?.syncEnabled && s.syncRemoteUrl && s.syncIntervalMinutes) {
+          startAutoSync(s.syncRemoteUrl, s.syncIntervalMinutes);
         }
       }).catch(() => {});
     });
