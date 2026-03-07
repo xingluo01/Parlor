@@ -16,39 +16,42 @@ An AI roleplaying frontend built with React, TypeScript, and Vite, backed by a N
 - **Bookmarks** - Pin and quickly navigate to important messages
 - **Backup & Restore** - Quick and full backup/restore of all data
 
-## Getting Started
+## Quick Start
 
 ### Prerequisites
 
-- Node.js 18+
-- npm
+- [Node.js](https://nodejs.org/) 18+ (includes npm)
 
-### Installation
+### One-Command Launch
+
+Clone the repo and run the start script — it handles dependencies, building, and launching automatically:
+
+**Windows:**
+```bash
+git clone https://github.com/GhostNoodl/Parlor.git
+cd Parlor
+start.bat
+```
+
+**Mac / Linux:**
+```bash
+git clone https://github.com/GhostNoodl/Parlor.git
+cd Parlor
+./start.sh
+```
+
+Parlor will be running at `http://localhost:3001`.
+
+### Development Mode
+
+If you want hot-reloading for development:
 
 ```bash
 npm install
-```
-
-### Development
-
-Start the app in development mode (frontend + API server in one command):
-
-```bash
 npm run dev
 ```
 
-The app will be available at `http://localhost:5173`.
-
-### Production
-
-Build and run:
-
-```bash
-npm run build
-npm start
-```
-
-The full app (frontend + API) runs on `http://localhost:3001`.
+The dev server runs at `http://localhost:5173`.
 
 ## Architecture
 
