@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "node server.cjs"
+    "start": "npm run build && node server.cjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.19",
