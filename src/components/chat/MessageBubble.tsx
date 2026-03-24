@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, memo, useMemo, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
 import hljs from 'highlight.js/lib/common';
 import 'highlight.js/styles/atom-one-dark.css';
 import {
@@ -22,6 +24,62 @@ import {
 import * as tts from '../../services/tts';
 import { Button, Avatar, Textarea } from '../ui';
 import type { Message, CharacterCard } from '../../types';
+
+// ── Sanitization schema for HTML/CSS in AI messages ─────────────────────────────
+// Permissive enough for SillyTavern-style CSS graphics (styled divs, inline
+// styles, status panels, etc.) while blocking scripts and event handlers.
+const sanitizeSchema = {
+  tagNames: [
+    // Text & structure
+    'div', 'span', 'p', 'br', 'hr', 'center',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'b', 'i', 'u', 's', 'em', 'strong', 'small', 'mark', 'sub', 'sup',
+    'blockquote', 'pre', 'code',
+    // Lists
+    'ul', 'ol', 'li',
+    // Tables
+    'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col',
+    // Media
+    'img', 'figure', 'figcaption', 'audio', 'source', 'video',
+    // Interactive
+    'details', 'summary',
+    // Links
+    'a',
+    // Ruby
+    'ruby', 'rt', 'rp',
+    // Other
+    'abbr', 'cite', 'del', 'ins', 'kbd', 'q', 'var', 'wbr', 'time',
+    'dl', 'dt', 'dd', 'section', 'article', 'aside', 'header', 'footer', 'nav', 'main',
+    'font',
+  ],
+  attributes: {
+    '*': ['style', 'class', 'id', 'title', 'dir', 'lang', 'align', 'role', 'aria-*', 'data-*'],
+    'a': ['href', 'target', 'rel'],
+    'img': ['src', 'alt', 'width', 'height', 'loading'],
+    'td': ['colspan', 'rowspan', 'headers'],
+    'th': ['colspan', 'rowspan', 'scope', 'headers'],
+    'col': ['span'],
+    'colgroup': ['span'],
+    'ol': ['start', 'type', 'reversed'],
+    'li': ['value'],
+    'audio': ['src', 'controls', 'loop', 'autoplay', 'preload'],
+    'video': ['src', 'controls', 'loop', 'autoplay', 'preload', 'width', 'height', 'poster'],
+    'source': ['src', 'type'],
+    'time': ['datetime'],
+    'font': ['color', 'size', 'face'],
+    'blockquote': ['cite'],
+    'q': ['cite'],
+    'del': ['cite', 'datetime'],
+    'ins': ['cite', 'datetime'],
+  },
+  protocols: {
+    href: ['http', 'https', 'mailto'],
+    src: ['http', 'https', 'data'],
+    cite: ['http', 'https'],
+    poster: ['http', 'https', 'data'],
+  },
+  strip: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select', 'button'],
+};
 
 // ── Substitute {{char}} / {{user}} template variables ──────────────────────────
 function substituteVars(text: string, charName: string, personaName: string): string {
@@ -173,19 +231,49 @@ function DetailsBlock({ summary, body }: { summary: string; body: string }) {
   );
 }
 
-/** Renders message content with RP coloring and collapsible <details> blocks. */
+/**
+ * Extract `<style>` blocks from content, scope their rules under a unique class,
+ * and return the cleaned content + scoped CSS string.
+ */
+function extractAndScopeStyles(content: string, scopeClass: string): { cleaned: string; scopedCss: string } {
+  const styleBlocks: string[] = [];
+  const cleaned = content.replace(/<style[^>]*>([\s\S]*?)<\/style>/gi, (_, css) => {
+    styleBlocks.push(css);
+    return '';
+  });
+  if (styleBlocks.length === 0) return { cleaned: content, scopedCss: '' };
+
+  // Prefix every rule selector with the scope class
+  const scopedCss = styleBlocks.join('\n').replace(
+    /([^{}@/]+)\{/g,
+    (match, selector: string) => {
+      // Don't scope @-rules (e.g. @keyframes, @media)
+      if (selector.trim().startsWith('@')) return match;
+      // Scope each comma-separated selector
+      const scoped = selector.split(',').map((s: string) => `.${scopeClass} ${s.trim()}`).join(', ');
+      return `${scoped} {`;
+    }
+  );
+  return { cleaned, scopedCss };
+}
+
+/** Renders message content with RP coloring, HTML/CSS graphics, and collapsible <details> blocks. */
 export function RpContent({ content }: { content: string }) {
-  const segments = splitDetailBlocks(content);
+  const scopeClass = useMemo(() => `msg-scope-${Math.random().toString(36).slice(2, 8)}`, []);
+  const { cleaned, scopedCss } = useMemo(() => extractAndScopeStyles(content, scopeClass), [content, scopeClass]);
+
+  const segments = splitDetailBlocks(cleaned);
   return (
-    <>
+    <div className={scopeClass}>
+      {scopedCss && <style dangerouslySetInnerHTML={{ __html: scopedCss }} />}
       {segments.map((seg, i) =>
         seg.type === 'details' ? (
           <DetailsBlock key={i} summary={seg.summary} body={seg.body} />
         ) : (
-          <ReactMarkdown key={i} components={rpComponents as any}>{seg.content}</ReactMarkdown>
+          <ReactMarkdown key={i} components={rpComponents as any} rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema]]}>{seg.content}</ReactMarkdown>
         )
       )}
-    </>
+    </div>
   );
 }
 
