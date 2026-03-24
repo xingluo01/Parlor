@@ -77,7 +77,7 @@ async function buildApiRequest(
     ? [activeChat.summary, `[Relevant context from earlier]\n${vectorContext}`].filter(Boolean).join('\n\n')
     : activeChat.summary;
 
-  const apiMessages = buildMessages(systemPrompt, messages, contextSize, allLorebookEntries, allDepthInjections, effectiveSummary);
+  const apiMessages = buildMessages(systemPrompt, messages, contextSize, allLorebookEntries, allDepthInjections, effectiveSummary, preset.wi_format);
 
   const enabledScripts = await regexOps.getEnabled();
 
@@ -125,6 +125,7 @@ export function useChatGeneration({
 }: UseChatGenerationOptions) {
   const { updateChat, isStreaming, setIsStreaming, isImpersonating, setIsImpersonating, regeneratingMessageId, setRegeneratingMessageId, streamingContent, appendStreamingContent, clearStreamingContent, streamingReasoning, appendStreamingReasoning, clearStreamingReasoning } = useChatStore();
   const apiClientRef = useRef<APIClient | null>(null);
+  const continueRef = useRef<() => void>(() => {});
   const impersonateCallbackRef = useRef<((text: string) => void) | null>(null);
 
   // Get effective preset with parameter overrides applied
@@ -201,7 +202,7 @@ export function useChatGeneration({
       await client.streamCompletion(
         apiMessages,
         (chunk) => appendStreamingContent(chunk),
-        async (completeResponse, reasoning) => {
+        async (completeResponse, reasoning, finishReason) => {
           const processedContent = applyRegexScripts(completeResponse, enabledScripts, 'output');
 
           // Guard against empty API responses — don't save empty messages
@@ -275,6 +276,11 @@ export function useChatGeneration({
           setIsStreaming(false);
           clearStreamingContent();
           clearStreamingReasoning();
+
+          // Auto-continue if the response was truncated by token limit
+          if (finishReason === 'length' && settings?.autoContinue) {
+            setTimeout(() => continueRef.current(), 500);
+          }
         },
         (error) => {
           console.error('API Error:', error);
@@ -331,7 +337,7 @@ export function useChatGeneration({
 
     const chatId = activeChat.id;
     const { apiMessages, enabledScripts } = await buildApiRequest(
-      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, messagesBeforeResponse, undefined, settings?.translateLanguage,
+      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, messagesBeforeResponse, settings?.vectorStoreEnabled, settings?.translateLanguage,
     );
 
     try {
@@ -411,14 +417,14 @@ export function useChatGeneration({
 
     const chatId = activeChat.id;
     const { apiMessages, enabledScripts } = await buildApiRequest(
-      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, activeChat.messages, undefined, settings?.translateLanguage,
+      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, activeChat.messages, settings?.vectorStoreEnabled, settings?.translateLanguage,
     );
 
     try {
       await client.streamCompletion(
         apiMessages,
         (chunk) => appendStreamingContent(chunk),
-        async (completeResponse, reasoning) => {
+        async (completeResponse, reasoning, finishReason) => {
           const processedContent = applyRegexScripts(completeResponse, enabledScripts, 'output');
           const latestChat = useChatStore.getState().activeChat;
           const currentMessages = latestChat?.id === chatId ? latestChat.messages : activeChat.messages;
@@ -440,6 +446,11 @@ export function useChatGeneration({
           setIsStreaming(false);
           clearStreamingContent();
           clearStreamingReasoning();
+
+          // Auto-continue if truncated by token limit
+          if (finishReason === 'length' && settings?.autoContinue) {
+            setTimeout(() => continueRef.current(), 500);
+          }
         },
         (error) => {
           console.error('Continue error:', error);
@@ -456,6 +467,9 @@ export function useChatGeneration({
       clearStreamingReasoning();
     }
   }, [activeChat, connection, preset, character, persona, settings, getEffectivePreset, getEffectiveContextSize, updateChat, setIsStreaming, appendStreamingContent, clearStreamingContent, clearStreamingReasoning, appendStreamingReasoning]);
+
+  // Keep ref in sync for auto-continue (avoids circular deps between callbacks)
+  continueRef.current = continueGeneration;
 
   const stopGeneration = useCallback(() => {
     const { streamingContent: partialContent, streamingReasoning: partialReasoning, isImpersonating: wasImpersonating, regeneratingMessageId: regenMsgId } = useChatStore.getState();

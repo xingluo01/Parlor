@@ -29,24 +29,36 @@ function EntryModal({
   onSave: (data: Omit<LorebookEntry, 'id'>) => Promise<void>;
 }) {
   const [keywords, setKeywords] = useState('');
+  const [secondaryKeywords, setSecondaryKeywords] = useState('');
+  const [selective, setSelective] = useState(false);
+  const [selectiveLogic, setSelectiveLogic] = useState<'AND' | 'OR'>('AND');
   const [content, setContent] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [caseSensitive, setCaseSensitive] = useState(false);
+  const [matchWholeWords, setMatchWholeWords] = useState(false);
   const [insertionOrder, setInsertionOrder] = useState(100);
 
   useEffect(() => {
     if (isOpen) {
       if (entry) {
         setKeywords(entry.keywords.join(', '));
+        setSecondaryKeywords(entry.secondaryKeywords?.join(', ') || '');
+        setSelective(entry.selective ?? false);
+        setSelectiveLogic(entry.selectiveLogic ?? 'AND');
         setContent(entry.content);
         setEnabled(entry.enabled);
         setCaseSensitive(entry.caseSensitive ?? false);
+        setMatchWholeWords(entry.matchWholeWords ?? false);
         setInsertionOrder(entry.insertionOrder);
       } else {
         setKeywords('');
+        setSecondaryKeywords('');
+        setSelective(false);
+        setSelectiveLogic('AND');
         setContent('');
         setEnabled(true);
         setCaseSensitive(false);
+        setMatchWholeWords(false);
         setInsertionOrder(100);
       }
     }
@@ -56,11 +68,16 @@ function EntryModal({
 
   const handleSave = async () => {
     if (!canSave) return;
+    const secondaryList = secondaryKeywords.split(',').map(k => k.trim()).filter(Boolean);
     await onSave({
       keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
+      secondaryKeywords: secondaryList.length > 0 ? secondaryList : undefined,
+      selective: selective || undefined,
+      selectiveLogic: selective ? selectiveLogic : undefined,
       content: content.trim(),
       enabled,
       caseSensitive,
+      matchWholeWords: matchWholeWords || undefined,
       insertionOrder,
     });
   };
@@ -79,6 +96,47 @@ function EntryModal({
           onChange={(e) => setKeywords(e.target.value)}
           placeholder="e.g. dragon, fire drake, wyrm"
         />
+
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer mb-2">
+            <input
+              type="checkbox"
+              checked={selective}
+              onChange={(e) => setSelective(e.target.checked)}
+              className="rounded border-glass-border bg-dark-100 text-parlor-500"
+            />
+            <span className="text-sm text-gray-300">Selective (require secondary keywords)</span>
+          </label>
+          {selective && (
+            <div className="space-y-2">
+              <Input
+                label="Secondary Keywords (comma-separated)"
+                value={secondaryKeywords}
+                onChange={(e) => setSecondaryKeywords(e.target.value)}
+                placeholder="secondary1, secondary2"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setSelectiveLogic('AND')}
+                  className={`px-3 py-1 rounded text-xs font-medium ${
+                    selectiveLogic === 'AND' ? 'bg-parlor-600 text-white' : 'bg-dark-100 text-gray-400 border border-glass-border'
+                  }`}
+                >
+                  AND (all must match)
+                </button>
+                <button
+                  onClick={() => setSelectiveLogic('OR')}
+                  className={`px-3 py-1 rounded text-xs font-medium ${
+                    selectiveLogic === 'OR' ? 'bg-parlor-600 text-white' : 'bg-dark-100 text-gray-400 border border-glass-border'
+                  }`}
+                >
+                  OR (any can match)
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         <Textarea
           label="Content"
           value={content}
@@ -86,7 +144,7 @@ function EntryModal({
           placeholder="Content injected when keywords are found in context…"
           rows={5}
         />
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-6 flex-wrap">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -104,6 +162,15 @@ function EntryModal({
               className="rounded border-glass-border bg-dark-100 text-parlor-500"
             />
             <span className="text-sm text-gray-300">Case sensitive</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={matchWholeWords}
+              onChange={(e) => setMatchWholeWords(e.target.checked)}
+              className="rounded border-glass-border bg-dark-100 text-parlor-500"
+            />
+            <span className="text-sm text-gray-300">Match whole words</span>
           </label>
         </div>
         <div className="flex items-center gap-3">

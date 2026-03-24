@@ -30,10 +30,14 @@ export type CharacterCard = {
 export type LorebookEntry = {
   id: string;
   keywords: string[];
+  secondaryKeywords?: string[];
+  selective?: boolean;          // When true, require secondary keywords (AND/OR logic)
+  selectiveLogic?: 'AND' | 'OR'; // AND = all secondary must match; OR = any secondary matches
   content: string;
   enabled: boolean;
   insertionOrder: number;
   caseSensitive?: boolean;
+  matchWholeWords?: boolean;
 }
 
 export type Lorebook = {
@@ -179,6 +183,17 @@ export type PromptOrderEntry = {
 // Reasoning mode for different model types
 export type ReasoningMode = 'none' | 'auto' | 'openai' | 'anthropic' | 'deepseek' | 'glm';
 
+// Post-prompt processing modes (SillyTavern-compatible)
+export type PostPromptProcessing =
+  | 'none'
+  | 'merge'
+  | 'merge_tools'
+  | 'semi_strict'
+  | 'semi_strict_tools'
+  | 'strict'
+  | 'strict_tools'
+  | 'single_user';
+
 // Generation Preset (SillyTavern-compatible)
 export type Preset = {
   id: string;
@@ -200,6 +215,9 @@ export type Preset = {
   enableReasoning?: boolean;
   reasoningEffort?: 'low' | 'medium' | 'high';
   
+  // Post-prompt processing
+  post_prompt_processing?: PostPromptProcessing;
+
   // SillyTavern-style prompt configuration
   prompts?: PromptEntry[];
   prompt_order?: PromptOrderEntry[];
@@ -208,9 +226,12 @@ export type Preset = {
   impersonation_prompt?: string;
   new_chat_prompt?: string;
   new_group_chat_prompt?: string;
+  new_example_chat_prompt?: string;
   continue_nudge_prompt?: string;
+  group_nudge_prompt?: string;
   scenario_format?: string;
   personality_format?: string;
+  wi_format?: string;
 
   isDefault: boolean;
   createdAt: number;
@@ -323,6 +344,9 @@ export type AppSettings = {
 
   // Notifications
   notifyOnComplete?: boolean;
+
+  // Auto-continue
+  autoContinue?: boolean; // Automatically continue generation when response hits token limit
 
   // Summarization
   autoSummarize?: boolean;

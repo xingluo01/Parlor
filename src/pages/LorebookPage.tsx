@@ -22,24 +22,36 @@ function LorebookEntryModal({
   onSave: () => void;
 }) {
   const [keywords, setKeywords] = useState('');
+  const [secondaryKeywords, setSecondaryKeywords] = useState('');
+  const [selective, setSelective] = useState(false);
+  const [selectiveLogic, setSelectiveLogic] = useState<'AND' | 'OR'>('AND');
   const [content, setContent] = useState('');
   const [insertionOrder, setInsertionOrder] = useState(100);
   const [caseSensitive, setCaseSensitive] = useState(false);
+  const [matchWholeWords, setMatchWholeWords] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (entry) {
       setKeywords(entry.keywords.join(', '));
+      setSecondaryKeywords(entry.secondaryKeywords?.join(', ') || '');
+      setSelective(entry.selective ?? false);
+      setSelectiveLogic(entry.selectiveLogic ?? 'AND');
       setContent(entry.content);
       setInsertionOrder(entry.insertionOrder);
       setCaseSensitive(entry.caseSensitive ?? false);
+      setMatchWholeWords(entry.matchWholeWords ?? false);
       setEnabled(entry.enabled);
     } else {
       setKeywords('');
+      setSecondaryKeywords('');
+      setSelective(false);
+      setSelectiveLogic('AND');
       setContent('');
       setInsertionOrder(100);
       setCaseSensitive(false);
+      setMatchWholeWords(false);
       setEnabled(true);
     }
   }, [entry, isOpen]);
@@ -52,24 +64,31 @@ function LorebookEntryModal({
       .map(k => k.trim())
       .filter(Boolean);
 
+    const secondaryList = secondaryKeywords
+      .split(',')
+      .map(k => k.trim())
+      .filter(Boolean);
+
+    const entryData = {
+      keywords: keywordList,
+      secondaryKeywords: secondaryList.length > 0 ? secondaryList : undefined,
+      selective: selective || undefined,
+      selectiveLogic: selective ? selectiveLogic : undefined,
+      content: content.trim(),
+      insertionOrder,
+      caseSensitive,
+      matchWholeWords: matchWholeWords || undefined,
+      enabled,
+    };
+
     setIsSaving(true);
     try {
       if (entry) {
-        await lorebookOps.update(entry.id, {
-          keywords: keywordList,
-          content: content.trim(),
-          insertionOrder,
-          caseSensitive,
-          enabled,
-        });
+        await lorebookOps.update(entry.id, entryData);
       } else {
         await lorebookOps.add({
           id: generateUUID(),
-          keywords: keywordList,
-          content: content.trim(),
-          insertionOrder,
-          caseSensitive,
-          enabled,
+          ...entryData,
         });
       }
       onSave();
@@ -93,6 +112,46 @@ function LorebookEntryModal({
           onChange={(e) => setKeywords(e.target.value)}
           placeholder="keyword1, keyword2, keyword3"
         />
+
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer mb-2">
+            <input
+              type="checkbox"
+              checked={selective}
+              onChange={(e) => setSelective(e.target.checked)}
+              className="w-4 h-4 rounded border-glass-border accent-parlor-500"
+            />
+            <span className="text-sm text-gray-300">Selective (require secondary keywords)</span>
+          </label>
+          {selective && (
+            <div className="space-y-2">
+              <Input
+                label="Secondary Keywords (comma-separated)"
+                value={secondaryKeywords}
+                onChange={(e) => setSecondaryKeywords(e.target.value)}
+                placeholder="secondary1, secondary2"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setSelectiveLogic('AND')}
+                  className={`px-3 py-1 rounded text-xs font-medium ${
+                    selectiveLogic === 'AND' ? 'bg-parlor-600 text-white' : 'bg-dark-100 text-gray-400 border border-glass-border'
+                  }`}
+                >
+                  AND (all must match)
+                </button>
+                <button
+                  onClick={() => setSelectiveLogic('OR')}
+                  className={`px-3 py-1 rounded text-xs font-medium ${
+                    selectiveLogic === 'OR' ? 'bg-parlor-600 text-white' : 'bg-dark-100 text-gray-400 border border-glass-border'
+                  }`}
+                >
+                  OR (any can match)
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1.5">
@@ -128,6 +187,15 @@ function LorebookEntryModal({
                 className="w-4 h-4 rounded border-glass-border accent-parlor-500"
               />
               <span className="text-sm text-gray-300">Case Sensitive</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={matchWholeWords}
+                onChange={(e) => setMatchWholeWords(e.target.checked)}
+                className="w-4 h-4 rounded border-glass-border accent-parlor-500"
+              />
+              <span className="text-sm text-gray-300">Match Whole Words</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
@@ -283,9 +351,11 @@ export function LorebookPage() {
                   <p className="text-sm text-gray-300 truncate">{entry.content}</p>
 
                   {/* Meta */}
-                  <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500">
+                  <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500 flex-wrap">
                     <span>Order: {entry.insertionOrder}</span>
                     {entry.caseSensitive && <span>Case-sensitive</span>}
+                    {entry.matchWholeWords && <span>Whole words</span>}
+                    {entry.selective && <span>Selective ({entry.selectiveLogic || 'AND'})</span>}
                   </div>
                 </div>
 

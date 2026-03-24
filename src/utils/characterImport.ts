@@ -179,10 +179,14 @@ function normalizeCharacterData(data: any): Partial<CharacterCard> {
         entries: book.entries.map((entry: any, index: number) => ({
           id: entry.id || entry.uid || generateUUID(),
           keywords: entry.keywords || entry.keys || entry.key || [],
+          secondaryKeywords: entry.secondary_keys || entry.secondaryKeywords || undefined,
+          selective: entry.selective ?? undefined,
+          selectiveLogic: entry.selectiveLogic ?? entry.selective_logic ?? undefined,
           content: entry.content || entry.text || '',
-          enabled: entry.enabled ?? entry.disable ?? true,
+          enabled: entry.enabled ?? (entry.disable !== undefined ? !entry.disable : true),
           insertionOrder: entry.insertion_order ?? entry.order ?? index,
           caseSensitive: entry.case_sensitive ?? false,
+          matchWholeWords: entry.match_whole_words ?? entry.matchWholeWords ?? undefined,
         })),
       };
     }

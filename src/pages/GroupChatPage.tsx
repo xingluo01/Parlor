@@ -111,7 +111,18 @@ function buildGroupSystemPrompt(
   if (others.length === 0) return base;
 
   const otherNames = others.map(c => c.name).join(', ');
-  const groupNote = `\n\n## Group Chat Context\nYou are in a group conversation with: ${otherNames}. Respond ONLY as ${character.name}. Do NOT write dialogue or actions for the other characters.`;
+
+  // Use preset's group_nudge_prompt if available, substituting {{char}}, {{user}}, {{group}}
+  const nudgeTemplate = preset?.group_nudge_prompt;
+  let groupNote: string;
+  if (nudgeTemplate) {
+    groupNote = '\n\n' + nudgeTemplate
+      .replace(/\{\{char\}\}/gi, character.name)
+      .replace(/\{\{user\}\}/gi, persona?.name || 'User')
+      .replace(/\{\{group\}\}/gi, otherNames);
+  } else {
+    groupNote = `\n\n## Group Chat Context\nYou are in a group conversation with: ${otherNames}. Respond ONLY as ${character.name}. Do NOT write dialogue or actions for the other characters.`;
+  }
 
   return base + groupNote;
 }
@@ -124,6 +135,7 @@ export function GroupChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const apiClientRef = useRef<APIClient | null>(null);
 
   // Core state
   const [groupChat, setGroupChat] = useState<GroupChat | null>(null);
@@ -240,9 +252,11 @@ export function GroupChatPage() {
       character.characterBook?.entries,
       depthInjections,
       groupChat.summary,
+      preset?.wi_format,
     );
 
     const client = new APIClient(connection, preset, settings || undefined);
+    apiClientRef.current = client;
     abortControllerRef.current = new AbortController();
 
     return new Promise<Message | null>((resolve) => {
@@ -387,6 +401,8 @@ export function GroupChatPage() {
 
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
+    apiClientRef.current?.abort();
+    apiClientRef.current = null;
     setIsGenerating(false);
     setStreamingContent('');
     setStreamingCharId(null);

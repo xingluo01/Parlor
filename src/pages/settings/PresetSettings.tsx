@@ -10,7 +10,7 @@ import {
 import { Button, Input, Modal, ConfirmDialog, Textarea } from '../../components/ui';
 import { presetOps } from '../../db';
 import { parseSillyTavernPreset, isValidPresetFormat } from '../../utils/presetImport';
-import type { Preset, PromptEntry, PromptOrderEntry, ReasoningMode } from '../../types';
+import type { Preset, PromptEntry, PromptOrderEntry, ReasoningMode, PostPromptProcessing } from '../../types';
 import { PresetSlider } from './PresetSlider';
 import { PromptOrderEditor } from '../../components/settings/PromptOrderEditor';
 
@@ -251,6 +251,7 @@ export function PresetModal({
   const [reasoningMode, setReasoningMode] = useState<ReasoningMode | undefined>(undefined);
   const [reasoningBudgetTokens, setReasoningBudgetTokens] = useState<number>(8192);
   const [reasoningEffort, setReasoningEffort] = useState<'low' | 'medium' | 'high' | undefined>(undefined);
+  const [postPromptProcessing, setPostPromptProcessing] = useState<PostPromptProcessing>('none');
   const [isLoading, setIsLoading] = useState(false);
   const [prompts, setPrompts] = useState<Preset['prompts']>([]);
   const [promptOrder, setPromptOrder] = useState<PromptOrderEntry[]>([]);
@@ -261,8 +262,11 @@ export function PresetModal({
   const [impersonationPrompt, setImpersonationPrompt] = useState('');
   const [continueNudgePrompt, setContinueNudgePrompt] = useState('');
   const [newChatPrompt, setNewChatPrompt] = useState('');
+  const [newExampleChatPrompt, setNewExampleChatPrompt] = useState('');
+  const [groupNudgePrompt, setGroupNudgePrompt] = useState('');
   const [scenarioFormat, setScenarioFormat] = useState('{{scenario}}');
   const [personalityFormat, setPersonalityFormat] = useState('{{personality}}');
+  const [wiFormat, setWiFormat] = useState('{0}');
 
   useEffect(() => {
     if (preset) {
@@ -278,14 +282,18 @@ export function PresetModal({
       setReasoningMode(preset.reasoningMode);
       setReasoningBudgetTokens(preset.reasoningBudgetTokens ?? 8192);
       setReasoningEffort(preset.reasoningEffort);
+      setPostPromptProcessing(preset.post_prompt_processing || 'none');
       setPrompts(preset.prompts || []);
       setPromptOrder(preset.prompt_order || []);
       // Load utility prompts
       setImpersonationPrompt(preset.impersonation_prompt || '');
       setContinueNudgePrompt(preset.continue_nudge_prompt || '');
       setNewChatPrompt(preset.new_chat_prompt || '');
+      setNewExampleChatPrompt(preset.new_example_chat_prompt || '');
+      setGroupNudgePrompt(preset.group_nudge_prompt || '');
       setScenarioFormat(preset.scenario_format || '{{scenario}}');
       setPersonalityFormat(preset.personality_format || '{{personality}}');
+      setWiFormat(preset.wi_format || '{0}');
     } else {
       setName('');
       setTemperature(0.8);
@@ -299,13 +307,17 @@ export function PresetModal({
       setReasoningMode(undefined);
       setReasoningBudgetTokens(8192);
       setReasoningEffort(undefined);
+      setPostPromptProcessing('none');
       setPrompts([]);
       // Reset utility prompts
       setImpersonationPrompt('');
       setContinueNudgePrompt('');
       setNewChatPrompt('');
+      setNewExampleChatPrompt('');
+      setGroupNudgePrompt('');
       setScenarioFormat('{{scenario}}');
       setPersonalityFormat('{{personality}}');
+      setWiFormat('{0}');
     }
     setActivePromptIndex(null);
     setActiveTab('params');
@@ -329,6 +341,7 @@ export function PresetModal({
         reasoningMode,
         reasoningBudgetTokens: reasoningMode === 'anthropic' ? reasoningBudgetTokens : undefined,
         reasoningEffort: reasoningMode === 'openai' ? reasoningEffort : undefined,
+        post_prompt_processing: postPromptProcessing,
         isDefault: preset?.isDefault || false,
         prompts: prompts && prompts.length > 0 ? prompts : undefined,
         prompt_order: promptOrder.length > 0 ? promptOrder : undefined,
@@ -336,8 +349,11 @@ export function PresetModal({
         impersonation_prompt: impersonationPrompt,
         continue_nudge_prompt: continueNudgePrompt,
         new_chat_prompt: newChatPrompt,
+        new_example_chat_prompt: newExampleChatPrompt,
+        group_nudge_prompt: groupNudgePrompt,
         scenario_format: scenarioFormat,
         personality_format: personalityFormat,
+        wi_format: wiFormat,
       });
     } finally {
       setIsLoading(false);
@@ -466,6 +482,36 @@ export function PresetModal({
               </p>
             </div>
 
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                Example Chat Prompt
+              </label>
+              <Input
+                value={newExampleChatPrompt}
+                onChange={(e) => setNewExampleChatPrompt(e.target.value)}
+                placeholder="[Example Chat]"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Separator text placed before example dialogue blocks.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                Group Nudge Prompt
+              </label>
+              <Textarea
+                value={groupNudgePrompt}
+                onChange={(e) => setGroupNudgePrompt(e.target.value)}
+                placeholder="[Write the next reply only as {{char}}.]"
+                rows={2}
+                className="text-sm"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Injected in group chats to tell the model which character to write as. Use {'{{char}}'}, {'{{user}}'}, {'{{group}}'}.
+              </p>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1.5">
@@ -494,6 +540,20 @@ export function PresetModal({
                   How to format personality in prompts.
                 </p>
               </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                World Info Format
+              </label>
+              <Input
+                value={wiFormat}
+                onChange={(e) => setWiFormat(e.target.value)}
+                placeholder="{0}"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                How to format each World Info entry before injection. Use {'{0}'} as a placeholder for the entry content.
+              </p>
             </div>
           </div>
         )}
@@ -637,6 +697,36 @@ export function PresetModal({
               onChange={(e) => setStopSequences(e.target.value)}
               placeholder="\n, END, ---"
             />
+
+            {/* Post-Prompt Processing */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                Post-Prompt Processing
+              </label>
+              <select
+                value={postPromptProcessing}
+                onChange={(e) => setPostPromptProcessing(e.target.value as PostPromptProcessing)}
+                className="w-full px-3 py-2 rounded-lg bg-dark-100 border border-glass-border text-white text-sm"
+              >
+                <optgroup label="None">
+                  <option value="none">None</option>
+                </optgroup>
+                <optgroup label="With Tools">
+                  <option value="merge_tools">Merge consecutive roles (with tools)</option>
+                  <option value="semi_strict_tools">Semi-strict (alternating roles; with tools)</option>
+                  <option value="strict_tools">Strict (user first, alternating roles; with tools)</option>
+                </optgroup>
+                <optgroup label="No Tools">
+                  <option value="merge">Merge consecutive roles (no tools)</option>
+                  <option value="semi_strict">Semi-strict (alternating roles; no tools)</option>
+                  <option value="strict">Strict (user first, alternating roles; no tools)</option>
+                  <option value="single_user">Single user message (no tools)</option>
+                </optgroup>
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                Controls how messages are formatted before sending to the API. Use strict modes for models that require role alternation.
+              </p>
+            </div>
           </div>
         )}
 
@@ -756,6 +846,22 @@ export function PromptsEditor({
             />
           </div>
         )}
+        {(activePrompt.identifier === 'main' || activePrompt.identifier === 'jailbreak') && (
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={activePrompt.forbid_overrides || false}
+                onChange={(e) => onUpdatePrompt(activePromptIndex, { forbid_overrides: e.target.checked })}
+                className="rounded border-glass-border bg-dark-100"
+              />
+              Forbid Overrides
+            </label>
+            <p className="text-xs text-gray-500">
+              Prevents character card from replacing this prompt's content.
+            </p>
+          </div>
+        )}
         {activePrompt.marker && (
           <div className="p-2 bg-yellow-500/10 border border-yellow-500/30 rounded text-xs text-yellow-400">
             This is a marker prompt (used for depth positioning)
@@ -804,7 +910,7 @@ export function PromptsEditor({
       </div>
 
       {/* Desktop: side-by-side */}
-      <div className="hidden sm:flex gap-4 min-h-[400px]">
+      <div className="hidden sm:flex gap-4 h-[60vh] min-h-[400px]">
         <div className="w-1/3 border border-glass-border rounded-lg overflow-hidden">
           {promptList}
         </div>

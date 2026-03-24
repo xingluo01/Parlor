@@ -19,6 +19,7 @@ export function GeneralSettings({
   const [avatarSize, setAvatarSize] = useState<'small' | 'medium' | 'large'>('medium');
   const [autoHideMobileMenus, setAutoHideMobileMenus] = useState(true);
   const [notifyOnComplete, setNotifyOnComplete] = useState(false);
+  const [autoContinue, setAutoContinue] = useState(false);
   const [autoSummarize, setAutoSummarize] = useState(false);
   const [autoSummarizeInterval, setAutoSummarizeInterval] = useState(20);
   const [maxResponseTokens, setMaxResponseTokens] = useState(4096);
@@ -40,6 +41,7 @@ export function GeneralSettings({
       setAvatarSize(settings.avatarSize || 'medium');
       setAutoHideMobileMenus(settings.autoHideMobileMenus ?? true);
       setNotifyOnComplete(settings.notifyOnComplete ?? false);
+      setAutoContinue(settings.autoContinue ?? false);
       setAutoSummarize(settings.autoSummarize ?? false);
       setAutoSummarizeInterval(settings.autoSummarizeInterval ?? 20);
       setMaxResponseTokens(settings.maxResponseTokens || 4096);
@@ -62,6 +64,7 @@ export function GeneralSettings({
         avatarSize !== settings.avatarSize ||
         autoHideMobileMenus !== settings.autoHideMobileMenus ||
         notifyOnComplete !== (settings.notifyOnComplete ?? false) ||
+        autoContinue !== (settings.autoContinue ?? false) ||
         autoSummarize !== (settings.autoSummarize ?? false) ||
         autoSummarizeInterval !== (settings.autoSummarizeInterval ?? 20) ||
         maxResponseTokens !== (settings.maxResponseTokens || 4096) ||
@@ -74,7 +77,7 @@ export function GeneralSettings({
         JSON.stringify(imageGen) !== JSON.stringify(settings.imageGen || { enabled: false, provider: 'dalle' });
       setHasChanges(changed);
     }
-  }, [contextSize, contextSizeInTokens, avatarSize, autoHideMobileMenus, notifyOnComplete, autoSummarize, autoSummarizeInterval, maxResponseTokens, reasoningMode, reasoningEffort, quickReplies, ttsEnabled, ttsAutoPlay, translateLanguage, imageGen, settings]);
+  }, [contextSize, contextSizeInTokens, avatarSize, autoHideMobileMenus, notifyOnComplete, autoContinue, autoSummarize, autoSummarizeInterval, maxResponseTokens, reasoningMode, reasoningEffort, quickReplies, ttsEnabled, ttsAutoPlay, translateLanguage, imageGen, settings]);
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -84,6 +87,7 @@ export function GeneralSettings({
       avatarSize,
       autoHideMobileMenus,
       notifyOnComplete,
+      autoContinue,
       autoSummarize,
       autoSummarizeInterval,
       maxResponseTokens,
@@ -238,6 +242,30 @@ export function GeneralSettings({
                 onChange={v => setAutoSummarizeInterval(Math.round(v))}
               />
             )}
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-sm font-medium text-gray-300">
+                  Auto-Continue on Token Limit
+                </label>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Automatically continue generation when a response is cut off by the max token limit.
+                </p>
+              </div>
+              <button
+                onClick={() => setAutoContinue(!autoContinue)}
+                className={`
+                  w-12 h-6 rounded-full transition-colors relative flex-shrink-0
+                  ${autoContinue ? 'bg-parlor-500' : 'bg-dark-100'}
+                `}
+              >
+                <span
+                  className={`
+                    absolute top-1 w-4 h-4 rounded-full bg-white transition-transform
+                    ${autoContinue ? 'left-7' : 'left-1'}
+                  `}
+                />
+              </button>
+            </div>
           </div>
         </div>
 

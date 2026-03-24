@@ -30,6 +30,7 @@ import { characterOps, chatOps, connectionOps, presetOps, personaOps, settingsOp
 import { useChatStore, usePersonaStore } from '../stores';
 import { buildSystemPrompt } from '../services/api';
 import { useChatGeneration } from '../hooks/useChatGeneration';
+import { useHotkeys } from '../hooks/useHotkeys';
 import type { CharacterCard, ChatSession, Message, ConnectionProfile, Preset, Persona, AppSettings, ParameterOverrides, WorldInfo, QuickReply } from '../types';
 import { ChatPageHeader } from './ChatPageHeader';
 
@@ -142,6 +143,24 @@ export function ChatPage() {
   });
 
   const isGenerating = isStreaming;
+
+  // Global hotkeys
+  useHotkeys(useMemo(() => ({
+    send: () => { if (!isGenerating) handleSendRef.current?.(); },
+    continue: () => { if (!isGenerating) continueGeneration(); },
+    regenerate: () => {
+      if (!isGenerating && activeChat?.messages?.length) {
+        const lastAssistant = [...activeChat.messages].reverse().find(m => m.role === 'assistant');
+        if (lastAssistant) regenerateResponse(lastAssistant.id);
+      }
+    },
+    stopGeneration: () => { if (isGenerating) stopGeneration(); },
+    focusInput: () => inputRef.current?.focus(),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [isGenerating, activeChat?.messages, continueGeneration, regenerateResponse, stopGeneration]));
+
+  // Ref to avoid stale closure for hotkey send
+  const handleSendRef = useRef<(() => void) | null>(null);
 
   // Get avatar size from settings
   const getAvatarSize = (): 'xs' | 'sm' | 'md' | 'lg' | 'xl' => {
@@ -369,6 +388,9 @@ export function ChatPage() {
     setIsSending(false);
   };
 
+  // Keep ref in sync for hotkeys
+  handleSendRef.current = () => handleSend();
+
   // Handle input change — show command palette on '/'
   const handleInputChange = (value: string) => {
     setInputValue(value);
@@ -586,12 +608,14 @@ export function ChatPage() {
   const handleSaveOverrides = async (newOverrides: ParameterOverrides) => {
     if (!activeChat) return;
     const hasOverrides = Object.values(newOverrides).some(v => v !== undefined);
+    const resolved = hasOverrides ? newOverrides : undefined;
     await chatOps.update(activeChat.id, {
-      parameterOverrides: hasOverrides ? newOverrides : undefined,
+      parameterOverrides: resolved,
     });
     updateChat(activeChat.id, {
-      parameterOverrides: hasOverrides ? newOverrides : undefined,
+      parameterOverrides: resolved,
     });
+    setOverrides(resolved ?? {});
     setShowParamsPanel(false);
   };
 
@@ -1145,7 +1169,6 @@ export function ChatPage() {
             setShowGreetingPicker(false);
           }}
           onClose={() => {
-            createNewChatWithGreeting(character.firstMessage);
             setShowGreetingPicker(false);
           }}
         />

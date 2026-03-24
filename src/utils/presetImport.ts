@@ -1,4 +1,4 @@
-import type { Preset, PromptEntry, PromptOrderEntry } from '../types';
+import type { Preset, PromptEntry, PromptOrderEntry, PostPromptProcessing } from '../types';
 import { generateUUID } from './uuid';
 
 // ──────────────────────────────────────────────────────────────
@@ -105,6 +105,7 @@ function getBuiltinMarkerContent(
   vars: PresetBuildVariables,
   personalityFormat: string,
   scenarioFormat: string,
+  newExampleChatPrompt?: string,
 ): string {
   switch (identifier) {
     case 'worldInfoBefore':
@@ -129,8 +130,11 @@ function getBuiltinMarkerContent(
     case 'worldInfoAfter':
       return vars.worldInfoAfter || '';
 
-    case 'dialogueExamples':
-      return vars.mesExamples || '';
+    case 'dialogueExamples': {
+      if (!vars.mesExamples) return '';
+      const separator = newExampleChatPrompt || '';
+      return separator ? `${separator}\n${vars.mesExamples}` : vars.mesExamples;
+    }
 
     case 'chatStart':
     case 'chatHistory':
@@ -196,12 +200,31 @@ export function buildPromptFromPreset(preset: Preset, variables: PresetBuildVari
 
   const personalityFormat = preset.personality_format || '{{personality}}';
   const scenarioFormat = preset.scenario_format || '{{scenario}}';
+  const newExampleChatPrompt = preset.new_example_chat_prompt || '';
 
   // Quick lookup for prompt entries by identifier
   const promptMap = new Map<string, PromptEntry>();
   for (const p of preset.prompts) {
     promptMap.set(p.identifier, p);
   }
+
+  /**
+   * Resolve the effective content for a prompt entry.
+   * Implements SillyTavern's forbid_overrides behaviour:
+   * - "main" entry: character's systemPrompt replaces content unless forbid_overrides
+   * - "jailbreak" entry: character's postHistoryInstructions replaces content unless forbid_overrides
+   */
+  const resolveContent = (prompt: PromptEntry): string => {
+    if (!prompt.forbid_overrides) {
+      if (prompt.identifier === 'main' && variables.systemPrompt) {
+        return variables.systemPrompt;
+      }
+      if (prompt.identifier === 'jailbreak' && variables.postHistoryInstructions) {
+        return variables.postHistoryInstructions;
+      }
+    }
+    return prompt.content;
+  };
 
   const parts: string[] = [];
 
@@ -222,11 +245,11 @@ export function buildPromptFromPreset(preset: Preset, variables: PresetBuildVari
         // Check if the user provided a custom override for this built-in slot
         const custom = promptMap.get(id);
         if (custom && !custom.marker && custom.enabled !== false && custom.content) {
-          const content = substituteTemplateVars(custom.content, variables);
+          const content = substituteTemplateVars(resolveContent(custom), variables);
           if (content.trim()) parts.push(content);
         } else {
           // Inject the built-in content (charDescription, personality, etc.)
-          const content = getBuiltinMarkerContent(id, variables, personalityFormat, scenarioFormat);
+          const content = getBuiltinMarkerContent(id, variables, personalityFormat, scenarioFormat, newExampleChatPrompt);
           if (content.trim()) parts.push(content);
         }
         continue;
@@ -234,12 +257,14 @@ export function buildPromptFromPreset(preset: Preset, variables: PresetBuildVari
 
       // Regular user-defined prompt entry
       const prompt = promptMap.get(id);
-      if (!prompt || prompt.enabled === false || prompt.marker || !prompt.content) continue;
+      if (!prompt || prompt.enabled === false || prompt.marker) continue;
 
       // injection_position:1 entries belong in the chat history (handled by getDepthInjections)
       if (prompt.injection_position === 1) continue;
 
-      const content = substituteTemplateVars(prompt.content, variables);
+      const resolved = resolveContent(prompt);
+      if (!resolved) continue;
+      const content = substituteTemplateVars(resolved, variables);
       if (content.trim()) parts.push(content);
     }
 
@@ -247,11 +272,13 @@ export function buildPromptFromPreset(preset: Preset, variables: PresetBuildVari
     // listed in prompt_order at all (not explicitly disabled, just absent).
     for (const prompt of preset.prompts) {
       if (processedIds.has(prompt.identifier)) continue;
-      if (prompt.enabled === false || prompt.marker || !prompt.content) continue;
+      if (prompt.enabled === false || prompt.marker) continue;
       if (prompt.injection_position === 1) continue;
       if (BUILTIN_MARKER_IDS.has(prompt.identifier)) continue;
 
-      const content = substituteTemplateVars(prompt.content, variables);
+      const resolved = resolveContent(prompt);
+      if (!resolved) continue;
+      const content = substituteTemplateVars(resolved, variables);
       if (content.trim()) parts.push(content);
     }
   } else {
@@ -261,7 +288,7 @@ export function buildPromptFromPreset(preset: Preset, variables: PresetBuildVari
 
       if (prompt.marker || BUILTIN_MARKER_IDS.has(prompt.identifier)) {
         const content = getBuiltinMarkerContent(
-          prompt.identifier, variables, personalityFormat, scenarioFormat,
+          prompt.identifier, variables, personalityFormat, scenarioFormat, newExampleChatPrompt,
         );
         if (content.trim()) parts.push(content);
         continue;
@@ -270,8 +297,9 @@ export function buildPromptFromPreset(preset: Preset, variables: PresetBuildVari
       // injection_position:1 entries belong in the chat history (handled by getDepthInjections)
       if (prompt.injection_position === 1) continue;
 
-      if (!prompt.content) continue;
-      const content = substituteTemplateVars(prompt.content, variables);
+      const resolved = resolveContent(prompt);
+      if (!resolved) continue;
+      const content = substituteTemplateVars(resolved, variables);
       if (content.trim()) parts.push(content);
     }
   }
@@ -318,9 +346,20 @@ export function getDepthInjections(preset: Preset, variables: PresetBuildVariabl
     if (prompt.injection_position !== 1) continue;
     if (prompt.enabled === false) continue;
     if (disabledByOrder.has(prompt.identifier)) continue;
-    if (prompt.marker || !prompt.content) continue;
+    if (prompt.marker) continue;
 
-    const content = substituteTemplateVars(prompt.content, variables);
+    // Apply forbid_overrides: "main"/"jailbreak" entries can be replaced by character fields
+    let rawContent = prompt.content;
+    if (!prompt.forbid_overrides) {
+      if (prompt.identifier === 'main' && variables.systemPrompt) {
+        rawContent = variables.systemPrompt;
+      } else if (prompt.identifier === 'jailbreak' && variables.postHistoryInstructions) {
+        rawContent = variables.postHistoryInstructions;
+      }
+    }
+    if (!rawContent) continue;
+
+    const content = substituteTemplateVars(rawContent, variables);
     if (!content.trim()) continue;
 
     injections.push({
@@ -414,9 +453,13 @@ export function parseSillyTavernPreset(json: unknown, fileName?: string): Preset
     impersonation_prompt: String(data.impersonation_prompt || ''),
     new_chat_prompt: String(data.new_chat_prompt || ''),
     new_group_chat_prompt: String(data.new_group_chat_prompt || ''),
+    new_example_chat_prompt: String(data.new_example_chat_prompt || ''),
     continue_nudge_prompt: String(data.continue_nudge_prompt || ''),
+    group_nudge_prompt: String(data.group_nudge_prompt || ''),
     scenario_format: String(data.scenario_format || '{{scenario}}'),
     personality_format: String(data.personality_format || '{{personality}}'),
+    wi_format: String(data.wi_format || '{0}'),
+    post_prompt_processing: (typeof data.post_prompt_processing === 'string' ? data.post_prompt_processing : 'none') as PostPromptProcessing,
 
     isDefault: false,
     createdAt: Date.now(),

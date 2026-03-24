@@ -8,6 +8,7 @@ import type {
   LorebookEntry,
   APIProvider,
   ReasoningMode,
+  PostPromptProcessing,
   AppSettings
 } from '../types';
 import { buildPromptFromPreset, getDepthInjections } from '../utils/presetImport';
@@ -21,7 +22,7 @@ function detectReasoningMode(model: string): ReasoningMode {
   if (modelLower.includes('o1-') || modelLower.includes('o1.') ||
       modelLower.includes('o3-') || modelLower.includes('o3.') ||
       modelLower.includes('o4-') ||
-      modelLower.endsWith('/o1') || modelLower.endsWith('/o3')) {
+      modelLower.endsWith('/o1') || modelLower.endsWith('/o3') || modelLower.endsWith('/o4')) {
     return 'openai';
   }
 
@@ -64,7 +65,7 @@ function parseGLMThinking(content: string): { reasoning: string; response: strin
 
 export type StreamCallback = (chunk: string) => void;
 export type ReasoningCallback = (reasoningChunk: string) => void;
-export type CompletionCallback = (fullResponse: string, reasoning?: string) => void;
+export type CompletionCallback = (fullResponse: string, reasoning?: string, finishReason?: string) => void;
 export type ErrorCallback = (error: Error) => void;
 
 // Build the system prompt from character and persona
@@ -120,6 +121,11 @@ export function buildSystemPrompt(
     }
   }
 
+  // Add example messages for few-shot learning
+  if (character.mesExamples) {
+    parts.push(`\n## Example Dialogue\n${character.mesExamples}`);
+  }
+
   // Add post-history instructions
   if (character.postHistoryInstructions) {
     parts.push(`\n## Instructions\n${character.postHistoryInstructions}`);
@@ -136,6 +142,7 @@ export function buildMessages(
   lorebookEntries?: LorebookEntry[],
   depthInjections?: DepthInjection[],
   summary?: string,
+  wiFormat?: string,
 ): ChatCompletionRequest['messages'] {
   const apiMessages: ChatCompletionRequest['messages'] = [];
 
@@ -157,21 +164,45 @@ export function buildMessages(
   if (lorebookEntries && lorebookEntries.length > 0) {
     const recentMessages = messages.slice(-contextSize);
     const recentContent = recentMessages.map(m => m.content).join(' ');
-
     const recentContentLower = recentContent.toLowerCase();
+
+    /** Check if a single keyword matches the content. */
+    const keywordMatches = (keyword: string, entry: LorebookEntry): boolean => {
+      const text = entry.caseSensitive ? recentContent : recentContentLower;
+      const kw = entry.caseSensitive ? keyword : keyword.toLowerCase();
+      if (entry.matchWholeWords) {
+        const pattern = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, entry.caseSensitive ? '' : 'i');
+        return pattern.test(recentContent);
+      }
+      return text.includes(kw);
+    };
+
     const triggeredEntries = lorebookEntries
       .filter(entry => entry.enabled)
-      .filter(entry =>
-        entry.keywords.some(keyword =>
-          entry.caseSensitive
-            ? recentContent.includes(keyword)
-            : recentContentLower.includes(keyword.toLowerCase())
-        )
-      )
+      .filter(entry => {
+        // Primary keywords must have at least one match
+        const primaryHit = entry.keywords.some(kw => keywordMatches(kw, entry));
+        if (!primaryHit) return false;
+
+        // If selective mode with secondary keywords, apply AND/OR logic
+        if (entry.selective && entry.secondaryKeywords && entry.secondaryKeywords.length > 0) {
+          const logic = entry.selectiveLogic || 'AND';
+          if (logic === 'AND') {
+            return entry.secondaryKeywords.every(kw => keywordMatches(kw, entry));
+          } else {
+            return entry.secondaryKeywords.some(kw => keywordMatches(kw, entry));
+          }
+        }
+
+        return true;
+      })
       .sort((a, b) => a.insertionOrder - b.insertionOrder);
 
     if (triggeredEntries.length > 0) {
-      const loreContent = triggeredEntries.map(e => e.content).join('\n\n');
+      const format = wiFormat || '{0}';
+      const loreContent = triggeredEntries
+        .map(e => format.replace('{0}', e.content))
+        .join('\n\n');
       apiMessages.push({
         role: 'system',
         content: `[Lorebook]\n${loreContent}`,
@@ -238,6 +269,136 @@ export function buildDepthInjections(
 ): DepthInjection[] {
   if (!preset?.prompts) return [];
   return getDepthInjections(preset, buildPresetVariables(character, persona, customSystemPrompt));
+}
+
+// ──────────────────────────────────────────────────────────────
+// Post-prompt processing (SillyTavern-compatible)
+// ──────────────────────────────────────────────────────────────
+
+type ApiMsg = ChatCompletionRequest['messages'][number];
+
+/** Merge adjacent messages that share the same role. */
+function mergeConsecutiveRoles(msgs: ApiMsg[]): ApiMsg[] {
+  const result: ApiMsg[] = [];
+  for (const msg of msgs) {
+    const last = result[result.length - 1];
+    if (last && last.role === msg.role) {
+      last.content += '\n' + msg.content;
+    } else {
+      result.push({ ...msg });
+    }
+  }
+  return result;
+}
+
+/**
+ * Semi-strict: system messages stay in place, but non-system messages
+ * must alternate user ↔ assistant. Consecutive same-role non-system
+ * messages are merged.
+ */
+function semiStrictAlternating(msgs: ApiMsg[]): ApiMsg[] {
+  const result: ApiMsg[] = [];
+  let lastNonSystemRole: string | null = null;
+
+  for (const msg of msgs) {
+    if (msg.role === 'system') {
+      result.push({ ...msg });
+      continue;
+    }
+    if (lastNonSystemRole === msg.role) {
+      // Merge into the last non-system message
+      for (let i = result.length - 1; i >= 0; i--) {
+        if (result[i].role !== 'system') {
+          result[i].content += '\n' + msg.content;
+          break;
+        }
+      }
+    } else {
+      result.push({ ...msg });
+      lastNonSystemRole = msg.role;
+    }
+  }
+  return result;
+}
+
+/**
+ * Strict: leading system messages stay, all remaining system messages
+ * are folded into the preceding non-system message, first non-system
+ * message must be user, then strict user ↔ assistant alternation.
+ */
+function strictAlternating(msgs: ApiMsg[]): ApiMsg[] {
+  // Separate leading system block from the rest
+  let systemEnd = 0;
+  while (systemEnd < msgs.length && msgs[systemEnd].role === 'system') systemEnd++;
+
+  const leading = msgs.slice(0, systemEnd).map(m => ({ ...m }));
+  const rest = msgs.slice(systemEnd);
+
+  // Fold mid-conversation system messages into the preceding message
+  const folded: ApiMsg[] = [];
+  for (const msg of rest) {
+    if (msg.role === 'system') {
+      const prev = folded[folded.length - 1];
+      if (prev) {
+        prev.content += '\n' + msg.content;
+      } else {
+        // No preceding non-system message — append to leading system block
+        const last = leading[leading.length - 1];
+        if (last) last.content += '\n' + msg.content;
+        else leading.push({ ...msg });
+      }
+    } else {
+      folded.push({ ...msg });
+    }
+  }
+
+  // Ensure first non-system message is user
+  if (folded.length > 0 && folded[0].role !== 'user') {
+    folded.unshift({ role: 'user', content: '' });
+  }
+
+  // Merge consecutive same-role messages to enforce alternation
+  const alternated = mergeConsecutiveRoles(folded);
+
+  return [...leading, ...alternated];
+}
+
+/** Collapse everything into one user message with role labels. */
+function singleUserMessage(msgs: ApiMsg[]): ApiMsg[] {
+  const parts = msgs.map(m => {
+    const label = m.role === 'system' ? '[System]' : m.role === 'user' ? '[User]' : '[Assistant]';
+    return `${label}\n${m.content}`;
+  });
+  return [{ role: 'user', content: parts.join('\n\n') }];
+}
+
+/** Apply the selected post-prompt processing mode to the message array. */
+function applyPostPromptProcessing(
+  msgs: ChatCompletionRequest['messages'],
+  mode: PostPromptProcessing | undefined,
+): ChatCompletionRequest['messages'] {
+  if (!mode || mode === 'none' || msgs.length === 0) return msgs;
+
+  // "No tools" variants strip tool-role messages (future-proofing)
+  const noTools = !mode.endsWith('_tools');
+  let processed = noTools
+    ? msgs.filter(m => (m as Record<string, unknown>).role !== 'tool')
+    : [...msgs];
+
+  const base = mode.replace(/_tools$/, '');
+
+  switch (base) {
+    case 'merge':
+      return mergeConsecutiveRoles(processed);
+    case 'semi_strict':
+      return semiStrictAlternating(processed);
+    case 'strict':
+      return strictAlternating(processed);
+    case 'single_user':
+      return singleUserMessage(processed);
+    default:
+      return processed;
+  }
 }
 
 // Main API client class
@@ -325,7 +486,10 @@ export class APIClient {
   }
 
   // Build request body based on provider
-  private buildRequestBody(messages: ChatCompletionRequest['messages']): Record<string, unknown> {
+  private buildRequestBody(rawMessages: ChatCompletionRequest['messages']): Record<string, unknown> {
+    // Apply post-prompt processing before building the final request
+    const messages = applyPostPromptProcessing(rawMessages, this.preset.post_prompt_processing);
+
     const baseRequest: Record<string, unknown> = {
       model: this.connection.model,
       messages,
@@ -487,6 +651,7 @@ export class APIClient {
       let fullContent = '';
       let fullReasoning = '';
       let buffer = '';
+      let finishReason = '';
 
       // Track <think> tag state — applies to ALL models (CoT prompts on any provider)
       let inThinkTag = false;
@@ -530,10 +695,16 @@ export class APIClient {
                     fullReasoning += delta.thinking;
                     onReasoning(delta.thinking);
                   }
+                } else if (parsed.type === 'message_delta' && parsed.delta?.stop_reason) {
+                  // Anthropic: stop_reason 'max_tokens' means truncated
+                  finishReason = parsed.delta.stop_reason === 'max_tokens' ? 'length' : parsed.delta.stop_reason;
                 }
                 // Skip other Anthropic event types (message_start, content_block_start, etc.)
               } else {
                 // OpenAI-compatible streaming format
+                const choiceFinishReason = parsed.choices?.[0]?.finish_reason;
+                if (choiceFinishReason) finishReason = choiceFinishReason;
+
                 const content = parsed.choices?.[0]?.delta?.content;
                 // Direct DeepSeek uses reasoning_content; OpenRouter uses reasoning (no suffix)
                 const reasoningContent = parsed.choices?.[0]?.delta?.reasoning_content
@@ -550,8 +721,14 @@ export class APIClient {
                   // instruct the model to reason inside <think> tags; we route that
                   // to the reasoning panel instead of the chat bubble.
                   if (!inThinkTag && content.includes('<think')) {
+                    const thinkIdx = content.indexOf('<think');
+                    const beforeThink = content.slice(0, thinkIdx);
+                    if (beforeThink) {
+                      fullContent += beforeThink;
+                      onChunk(beforeThink);
+                    }
                     inThinkTag = true;
-                    thinkBuffer = content;
+                    thinkBuffer = content.slice(thinkIdx);
                     continue;
                   }
 
@@ -595,10 +772,11 @@ export class APIClient {
         }
         if (parsed.response) {
           fullContent += parsed.response;
+          onChunk(parsed.response);
         }
       }
 
-      onComplete(fullContent, fullReasoning || undefined);
+      onComplete(fullContent, fullReasoning || undefined, finishReason || undefined);
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         console.log('Request aborted');
@@ -627,7 +805,10 @@ export class APIClient {
     }
 
     const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
+    // Anthropic returns { content: [{ text }] }, OpenAI-compatible returns { choices: [{ message: { content } }] }
+    return data.choices?.[0]?.message?.content
+      || data.content?.[0]?.text
+      || '';
   }
 
   // Abort ongoing request
@@ -646,7 +827,12 @@ export class APIClient {
       ];
 
       const requestBody = this.buildRequestBody(testMessages);
-      requestBody.max_tokens = 50;
+      // For o-series models, buildRequestBody replaces max_tokens with max_completion_tokens
+      if (requestBody.max_completion_tokens !== undefined) {
+        requestBody.max_completion_tokens = 50;
+      } else {
+        requestBody.max_tokens = 50;
+      }
       requestBody.stream = false;
 
       const response = await fetch(this.getEndpoint(), {
