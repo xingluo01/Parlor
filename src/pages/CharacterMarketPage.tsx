@@ -2,15 +2,16 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Plus, ExternalLink, Edit2, Trash2, Globe,
-  Save, X, Search, Loader2, Star, MessageSquare, Heart,
+  Save, X, Search, Loader2,
   Download, AlertCircle, CheckCircle,
-  ChevronDown, ChevronLeft, ChevronRight, Languages as TranslateIcon
+  ChevronDown, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { API_URL, settingsOps, worldInfoOps } from '../services/apiClient';
 import { characterOps } from '../db';
 import { generateUUID } from '../utils/uuid';
 import { importCharacterFromFile } from '../utils/characterImport';
 import type { AppSettings, CharacterCard, WorldInfo } from '../types';
+import { MarketCharacterCard, CharacterPreviewModal } from './characterMarket';
 
 // ========== 类型定义 ==========
 
@@ -958,127 +959,20 @@ export default function CharacterMarketPage() {
               </div>
             )}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-              {currentPageResults.map(item => {
-                const node = item.node;
-                const variantCount = item.count;
-                return (
-                <div
-                  key={node.fullPath}
-                  className="glass border border-glass-border rounded-lg overflow-hidden h-[220px] hover:shadow-glass-sm transition-shadow group cursor-pointer flex flex-col"
-                  onClick={() => handlePreview(node)}
-                >
-                  {/* 角色头像 */}
-                  <div className="aspect-[3/2] bg-dark-50 relative overflow-hidden">
-                    {node.avatar_url ? (
-                      <img
-                        src={node.avatar_url}
-                        alt={node.name}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-gray-500">
-                        <Globe size={32} />
-                      </div>
-                    )}
-                    {/* 评分角标 */}
-                    <div className="absolute top-2 right-2 bg-black/50 text-white text-xs px-1.5 py-0.5 rounded-full flex items-center gap-1">
-                      <Star size={10} className="text-yellow-400 fill-yellow-400" />
-                      {node.starCount}
-                    </div>
-                  </div>
-
-                  {/* 角色信息 */}
-                  <div className="p-3 flex flex-col flex-1 min-h-0">
-                    <h4 className="font-semibold text-white text-sm truncate shrink-0 flex items-center" title={node.name}>
-                      {node.name}
-                      {variantCount > 1 && (
-                        <span className="text-[10px] text-parlor-400 ml-1 shrink-0">
-                          +{variantCount - 1}
-                        </span>
-                      )}
-                    </h4>
-                    {node.description && (
-                      <p className="text-xs text-gray-400 mt-1 line-clamp-2">
-                        {node.description}
-                      </p>
-                    )}
-
-                    {/* 翻译结果 */}
-                    {translatedTexts[node.fullPath] && (
-                      <div className="mt-1 pt-1 border-t border-glass-border shrink-0">
-                        <p className="text-xs text-parlor-300 leading-tight">
-                          {translatedTexts[node.fullPath]}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* 标签 */}
-                    {node.topics && node.topics.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1 shrink-0">
-                        {node.topics.slice(0, 3).map(tag => (
-                          <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-glass-white text-gray-400 rounded">
-                            {tag}
-                          </span>
-                        ))}
-                        {node.topics.length > 3 && (
-                          <span className="text-[10px] px-1.5 py-0.5 text-gray-500">
-                            +{node.topics.length - 3}
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {/* 统计信息 */}
-                    <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500 shrink-0">
-                      <span className="flex items-center gap-1">
-                        <MessageSquare size={10} /> {node.nChats}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Heart size={10} /> {node.nFavorites || 0}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="font-mono">{node.nTokens}</span>
-                      </span>
-                    </div>
-
-                    {/* 操作按钮 */}
-                    <div className="flex gap-2 mt-auto pt-2 shrink-0">
-                      <button
-                        onClick={e => { e.stopPropagation(); handleImport(node); }}
-                        disabled={importingId === node.fullPath}
-                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs bg-parlor-500 text-white rounded-lg hover:bg-parlor-600 disabled:opacity-50 transition-colors"
-                      >
-                        {importingId === node.fullPath ? (
-                          <Loader2 size={12} className="animate-spin" />
-                        ) : (
-                          <Download size={12} />
-                        )}
-                        <span>{importingId === node.fullPath ? t('characterMarket.importing') : t('common.import')}</span>
-                      </button>
-                      {/* 翻译按钮 */}
-                      <button
-                        onClick={e => { e.stopPropagation(); handleTranslate(node); }}
-                        disabled={translatingId === node.fullPath}
-                        className="px-2 py-1.5 text-xs border border-glass-border rounded-lg hover:bg-glass-white transition-colors flex items-center gap-1 text-gray-400 hover:text-parlor-300 disabled:opacity-50"
-                        title="翻译"
-                      >
-                        <TranslateIcon size={12} />
-                      </button>
-                      <a
-                        href={`https://www.chub.ai/characters/${node.fullPath}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-3 py-1.5 text-xs border border-glass-border rounded-lg hover:bg-glass-white transition-colors flex items-center gap-1 text-gray-400 hover:text-white"
-                      >
-                        <ExternalLink size={12} />
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              );
-              })}
+              {currentPageResults.map(item => (
+                <MarketCharacterCard
+                  key={item.node.fullPath}
+                  node={item.node}
+                  variantCount={item.count}
+                  translatedText={translatedTexts[item.node.fullPath]}
+                  importingId={importingId}
+                  translatingId={translatingId}
+                  onPreview={handlePreview}
+                  onImport={handleImport}
+                  onTranslate={handleTranslate}
+                  t={t}
+                />
+              ))}
             </div>
           {/* 翻页导航 */}
           {filteredResults.length > 0 && (
@@ -1454,151 +1348,22 @@ export default function CharacterMarketPage() {
         </div>
       )}
 
-      {/* 角色预览弹窗 */}
-      {previewNode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setPreviewNode(null)}>
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl mx-4" onClick={e => e.stopPropagation()}>
-            {/* 标题栏 */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-              <h2 className="font-semibold text-sm truncate">{previewNode.name}</h2>
-              <button onClick={() => setPreviewNode(null)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
-                <X size={16} />
-              </button>
-            </div>
-
-            {/* 内容区 */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {previewLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 size={24} className="animate-spin text-parlor-500" />
-                </div>
-              ) : previewDetail ? (
-                <>
-                  {/* 头像 + 基本信息 */}
-                  <div className="flex items-center gap-3">
-                    {previewNode.avatar_url && (
-                      <img src={previewNode.avatar_url} alt={previewNode.name}
-                        className="w-16 h-16 rounded-full object-cover border border-glass-border"
-                      />
-                    )}
-                    <div>
-                      <h3 className="font-medium text-sm">{previewDetail.definition?.name || previewNode.name}</h3>
-                      <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
-                        <span>⭐ {previewNode.starCount || 0}</span>
-                        <span>💬 {previewNode.nChats || 0}</span>
-                        <span>📎 {previewNode.nTokens || 0} tokens</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 描述 */}
-                  {(previewDetail.definition?.description || previewNode.description) && (
-                    <div>
-                      <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">描述</h4>
-                      <p className="text-sm text-gray-300">{previewDetail.definition?.description || previewNode.description}</p>
-                    </div>
-                  )}
-
-                  {/* 性格 */}
-                  {previewDetail.definition?.personality && (
-                    <div>
-                      <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">性格</h4>
-                      <p className="text-sm text-gray-300">{previewDetail.definition.personality}</p>
-                    </div>
-                  )}
-
-                  {/* 场景 */}
-                  {previewDetail.definition?.scenario && (
-                    <div>
-                      <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">场景</h4>
-                      <p className="text-sm text-gray-300">{previewDetail.definition.scenario}</p>
-                    </div>
-                  )}
-
-                  {/* 开场白 */}
-                  {previewDetail.definition?.first_message && (
-                    <div>
-                      <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">开场白</h4>
-                      <div className="text-sm text-gray-300 bg-dark-100 rounded p-2 whitespace-pre-wrap max-h-32 overflow-y-auto">{previewDetail.definition.first_message}</div>
-                    </div>
-                  )}
-
-                  {/* 标签 */}
-                  {previewNode.topics && previewNode.topics.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-semibold text-gray-400 uppercase mb-1">标签</h4>
-                      <div className="flex flex-wrap gap-1">
-                        {previewNode.topics.map(t => (
-                          <span key={t} className="text-[10px] px-2 py-0.5 bg-dark-100 border border-glass-border rounded-full text-gray-400">{t}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-
-                </>
-              ) : (
-                <p className="text-sm text-gray-500 text-center py-4">无法加载详情，可直接导入</p>
-              )}
-            </div>
-
-            {/* 底部操作栏 */}
-            <div className="flex items-center justify-between gap-2 p-4 border-t border-gray-200 dark:border-gray-700">
-              {/* 左侧：变体翻页 */}
-              {previewVariants.length > 1 && (
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => {
-                      const newIdx = Math.max(0, previewVariantIndex - 1);
-                      setPreviewVariantIndex(newIdx);
-                      const nextNode = previewVariants[newIdx];
-                      setPreviewNode(nextNode);
-                      setPreviewLoading(true);
-                      setPreviewDetail(null);
-                      fetchChubCharacter(nextNode.fullPath).then(d => setPreviewDetail(d)).catch(() => setPreviewDetail(null)).finally(() => setPreviewLoading(false));
-                    }}
-                    disabled={previewVariantIndex === 0}
-                    className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30"
-                  >
-                    <ChevronLeft size={14} />
-                  </button>
-                  <span className="text-xs text-gray-400 tabular-nums">
-                    {previewVariantIndex + 1}/{previewVariants.length}
-                  </span>
-                  <button
-                    onClick={() => {
-                      const newIdx = Math.min(previewVariants.length - 1, previewVariantIndex + 1);
-                      setPreviewVariantIndex(newIdx);
-                      const nextNode = previewVariants[newIdx];
-                      setPreviewNode(nextNode);
-                      setPreviewLoading(true);
-                      setPreviewDetail(null);
-                      fetchChubCharacter(nextNode.fullPath).then(d => setPreviewDetail(d)).catch(() => setPreviewDetail(null)).finally(() => setPreviewLoading(false));
-                    }}
-                    disabled={previewVariantIndex >= previewVariants.length - 1}
-                    className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30"
-                  >
-                    <ChevronRight size={14} />
-                  </button>
-                </div>
-              )}
-
-              {/* 右侧：关闭 + 导入 */}
-              <div className="flex items-center gap-2 ml-auto">
-                <button onClick={() => setPreviewNode(null)} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">关闭</button>
-                <button
-                  onClick={() => { handleImport(previewNode); setPreviewNode(null); }}
-                  disabled={importingId === previewNode.fullPath}
-                  className="flex items-center gap-1.5 px-4 py-2 text-sm bg-parlor-500 text-white rounded-lg hover:bg-parlor-600 disabled:opacity-50"
-                >
-                  {importingId === previewNode.fullPath ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                  导入角色
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <CharacterPreviewModal
+        previewNode={previewNode}
+        previewDetail={previewDetail}
+        previewLoading={previewLoading}
+        previewVariants={previewVariants}
+        previewVariantIndex={previewVariantIndex}
+        importingId={importingId}
+        onClose={() => setPreviewNode(null)}
+        onVariantChange={(idx, node) => {
+          setPreviewVariantIndex(idx);
+          setPreviewNode(node);
+          setPreviewLoading(true);
+          setPreviewDetail(null);
+        }}
+        onImport={(node) => { handleImport(node); setPreviewNode(null); }}
+      />
     </div>
   );
 }
