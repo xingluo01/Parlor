@@ -40,29 +40,14 @@ interface ChubSearchNode {
 // ========== 预设市场链接 ==========
 
 const PRESET_LINKS: MarketLink[] = [
-  // 角色市场（有开放 API）
-  { id: 'chub', name: 'Chub.ai', url: 'https://www.chub.ai', description: '最大最活跃的 AI 角色卡片市场，支持搜索和一键导入', isPreset: true },
-
-  // 角色扮演平台
-  { id: 'janitorai', name: 'JanitorAI', url: 'https://janitorai.com', description: '丰富的角色扮演角色库', isPreset: true },
-  { id: 'character-tavern', name: 'Character Tavern', url: 'https://character-tavern.com', description: '角色扮演平台，包含大量角色', isPreset: true },
-  { id: 'backyard', name: 'Backyard AI', url: 'https://backyard.ai/hub', description: 'AI 角色扮演平台角色中心', isPreset: true },
-
-  // 角色卡市场/图鉴
-  { id: 'aicharactercards', name: 'AI Character Cards', url: 'https://aicharactercards.com', description: 'SillyTavern 角色卡静态市场', isPreset: true },
-  { id: 'moescape', name: 'Moescape', url: 'https://moescape.ai', description: '二次元 AI 创意平台，含角色扮演功能', isPreset: true },
-
-  // AI 聊天前端角色库
-  { id: 'risuai', name: 'RisuAI 角色库', url: 'https://risuai.xyz/characters', description: 'RisuAI 社区角色卡片库', isPreset: true },
-
-  // 官方社区
-  { id: 'sillytavern', name: 'SillyTavern 官方', url: 'https://sillytavern.app', description: 'SillyTavern 官方网站与社区资源', isPreset: true },
-
-  // 新增预设源
-  { id: 'characterhub', name: 'CharacterHub', url: 'https://characterhub.ai', description: 'AI 角色管理与发现平台', isPreset: true },
-  { id: 'pygmalion', name: 'Pygmalion', url: 'https://pygmalion.chat', description: 'Pygmalion 角色扮演社区', isPreset: true },
-  { id: 'venusai', name: 'Venus AI', url: 'https://venusai.chat', description: 'AI 角色扮演前端平台', isPreset: true },
-  { id: 'mancer', name: 'Mancer', url: 'https://mancer.tech', description: 'Mancer 角色扮演终端平台', isPreset: true },
+  // 有开放 API 的角色市场
+  { id: 'chub', name: 'Chub.ai', url: 'https://www.chub.ai', description: '最大最活跃的角色卡市场，支持搜索和一键导入', isPreset: true },
+  // 可直接下载角色卡的站点
+  { id: 'stpro', name: 'SillyTavern Pro', url: 'https://cards.sillytavern.one', description: '3.3 万+ 中文/英文角色卡', isPreset: true },
+  { id: 'charavault', name: 'CharaVault', url: 'https://charavault.net', description: '19.5 万角色卡，支持 PNG/JSON 下载', isPreset: true },
+  { id: 'aicharactercards', name: 'AI Character Cards', url: 'https://aicharactercards.com', description: 'SillyTavern 角色卡静态目录', isPreset: true },
+  { id: 'taverncard', name: 'TavernCard', url: 'https://www.taverncard.com', description: '角色卡展示与分享', isPreset: true },
+  { id: 'characterhub', name: 'Character Hub', url: 'https://www.characterhub.org', description: 'AI 角色管理与发现', isPreset: true },
 ];
 
 // ========== 简单 TTL 缓存 ==========
@@ -842,6 +827,16 @@ export default function CharacterMarketPage() {
               {isQuickImporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
               <span>{isQuickImporting ? t('characterMarket.importing') : t('common.import')}</span>
             </button>
+          </div>
+          {/* 快捷导入按钮 */}
+          <div className="flex flex-wrap gap-2 mt-3">
+            <span className="text-xs text-gray-500 self-center shrink-0">快捷导入:</span>
+            <button onClick={() => { setQuickUrl('https://cards.sillytavern.one'); }} className="text-xs px-2.5 py-1 rounded-md bg-dark-100 border border-glass-border text-gray-400 hover:text-parlor-300 hover:border-parlor-500/30 transition-colors">SillyTavern Pro</button>
+            <button onClick={() => { setQuickUrl('https://charavault.net'); }} className="text-xs px-2.5 py-1 rounded-md bg-dark-100 border border-glass-border text-gray-400 hover:text-parlor-300 hover:border-parlor-500/30 transition-colors">CharaVault</button>
+            <button onClick={() => { setQuickUrl('https://www.characterhub.org'); }} className="text-xs px-2.5 py-1 rounded-md bg-dark-100 border border-glass-border text-gray-400 hover:text-parlor-300 hover:border-parlor-500/30 transition-colors">Character Hub</button>
+            <a href="https://cards.sillytavern.one" target="_blank" rel="noopener noreferrer" className="text-xs px-2.5 py-1 rounded-md bg-dark-100 border border-glass-border text-gray-400 hover:text-parlor-300 hover:border-parlor-500/30 transition-colors flex items-center gap-1">
+              浏览市场 <ExternalLink size={10} />
+            </a>
           </div>
         </div>
 
