@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { Modal } from '../ui';
 import type { CharacterCard } from '../../types';
 
@@ -8,13 +9,14 @@ interface GreetingPickerModalProps {
 }
 
 export function GreetingPickerModal({ character, onSelect, onClose }: GreetingPickerModalProps) {
+  const { t } = useTranslation();
   const greetings = [
-    { label: 'Default', content: character.firstMessage },
-    ...(character.alternateGreetings ?? []).map((g, i) => ({ label: `Alternate ${i + 1}`, content: g })),
+    { label: t('common.default'), content: character.firstMessage },
+    ...(character.alternateGreetings ?? []).map((g, i) => ({ label: t('chat.alternateGreeting', { number: i + 1 }), content: g })),
   ];
 
   return (
-    <Modal isOpen onClose={onClose} title="Choose a Greeting" size="md">
+    <Modal isOpen onClose={onClose} title={t('chat.chooseGreeting')} size="md">
       <p className="text-sm text-parlor-400 mb-3 font-serif">{character.name}</p>
       <div className="max-h-96 overflow-y-auto space-y-2">
         {greetings.map(({ label, content }) => (

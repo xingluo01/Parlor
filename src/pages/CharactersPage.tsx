@@ -1,45 +1,35 @@
 import { useEffect, useState, useMemo, useCallback, useRef, memo } from 'react';
+import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { generateUUID } from '../utils/uuid';
-import { useVirtualizer } from '@tanstack/react-virtual';
-import { Search, Plus, Upload, ArrowUpDown, Tag, Clock, ArrowUpAz, ArrowDownAz, Calendar, ChevronDown, ChevronUp, X, Trash2, Edit3, LayoutGrid, List, CheckSquare, Square } from 'lucide-react';
+import { Search, Plus, Upload, ArrowUpDown, Tag, Clock, ArrowUpAz, ArrowDownAz, Calendar, ChevronDown, ChevronUp, ChevronRight, X, Trash2, Edit3, CheckSquare, Square, FolderOpen, Link2, Sparkles, Copy } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Input, Avatar, ConfirmDialog } from '../components/ui';
-import { useChatStore } from '../stores';
-import { characterOps, chatOps, personaOps } from '../db';
-import { avatarCache, requestAvatar, subscribeAvatar, prewarmAvatars } from '../utils/avatarCache';
-import type { ChatSession, CharacterCard } from '../types';
+import { useChatStore, useCharacterStore } from '../stores';
+import { characterOps, chatOps, connectionOps, personaOps, worldInfoOps } from '../db';
+import { avatarCache, subscribeAvatar, prewarmAvatars } from '../utils/avatarCache';
+import RelationModal from '../components/modals/RelationModal';
+import CharacterProcessModal from '../components/modals/CharacterProcessModal';
+import { useSelectMode } from '../hooks/useSelectMode';
+import type { ChatSession, CharacterCard, WorldInfo } from '../types';
+import { callAI } from '../services/ai';
+import { extractJSON, buildCreateCharacterPrompt, CARD_HEIGHT_MAP } from '../utils/prompts';
+import { settingsOps } from '../db';
 
 type SortOption = 'recent' | 'newest' | 'oldest' | 'alpha-asc' | 'alpha-desc';
 type TagSortOption = 'alpha' | 'count';
 
-const SORT_OPTIONS: { value: SortOption; label: string; icon: React.ReactNode }[] = [
-  { value: 'recent', label: 'Recently Chatted', icon: <Clock className="w-4 h-4" /> },
-  { value: 'newest', label: 'Newest First', icon: <Calendar className="w-4 h-4" /> },
-  { value: 'oldest', label: 'Oldest First', icon: <Calendar className="w-4 h-4" /> },
-  { value: 'alpha-asc', label: 'A to Z', icon: <ArrowUpAz className="w-4 h-4" /> },
-  { value: 'alpha-desc', label: 'Z to A', icon: <ArrowDownAz className="w-4 h-4" /> },
+const SORT_OPTIONS: { value: SortOption; labelKey: string; icon: React.ReactNode }[] = [
+  { value: 'recent', labelKey: 'characters.sortRecentlyChatted', icon: <Clock className="w-4 h-4" /> },
+  { value: 'newest', labelKey: 'characters.sortNewest', icon: <Calendar className="w-4 h-4" /> },
+  { value: 'oldest', labelKey: 'characters.sortOldest', icon: <Calendar className="w-4 h-4" /> },
+  { value: 'alpha-asc', labelKey: 'characters.sortAZ', icon: <ArrowUpAz className="w-4 h-4" /> },
+  { value: 'alpha-desc', labelKey: 'characters.sortZToA', icon: <ArrowDownAz className="w-4 h-4" /> },
 ];
-
-function useCols(parentRef: React.RefObject<HTMLDivElement | null>): number {
-  const [cols, setCols] = useState(5);
-  useEffect(() => {
-    const el = parentRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      const w = entry.contentRect.width;
-      if (w < 640) setCols(2);
-      else if (w < 1024) setCols(3);
-      else if (w < 1280) setCols(4);
-      else setCols(5);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [parentRef]);
-  return cols;
-}
 
 export function CharactersPage() {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { setActiveChat } = useChatStore();
   const [characters, setCharacters] = useState<CharacterCard[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -52,31 +42,39 @@ export function CharactersPage() {
   const [tagSortBy, setTagSortBy] = useState<TagSortOption>('alpha');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [characterToDelete, setCharacterToDelete] = useState<CharacterCard | null>(null);
-  const [viewMode, setViewModeRaw] = useState<'grid' | 'list'>(
-    () => (localStorage.getItem('parlor-characters-view') as 'grid' | 'list') || 'grid'
-  );
-  const setViewMode = (mode: 'grid' | 'list') => {
-    setViewModeRaw(mode);
-    localStorage.setItem('parlor-characters-view', mode);
-  };
-  const [selectMode, setSelectMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [viewMode] = useState<'grid' | 'list'>('grid');
+  const [cardSize, setCardSize] = useState<'small' | 'medium' | 'large'>('medium');
+  const { selectMode, selectedIds, toggleSelectMode, handleToggleSelect, handleSelectAll, clearSelection } = useSelectMode<CharacterCard>();
   const [deleteSelectedConfirm, setDeleteSelectedConfirm] = useState(false);
   const [deleteAllConfirm, setDeleteAllConfirm] = useState(false);
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
   const [lastChatTimeByChar, setLastChatTimeByChar] = useState<Map<string, number>>(new Map());
+  const [worldInfoBooks, setWorldInfoBooks] = useState<WorldInfo[]>([]);
+  const [relationModalChar, setRelationModalChar] = useState<CharacterCard | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [aiCreateChar, setAiCreateChar] = useState<{ bookId: string; bookName: string } | null>(null);
+  const [aiCharName, setAiCharName] = useState('');
+  const [aiCharPrompt, setAiCharPrompt] = useState('');
+  const [aiCharGenerating, setAiCharGenerating] = useState(false);
+  const [aiRefPersonaId, setAiRefPersonaId] = useState('');
+  const [aiRefBookId, setAiRefBookId] = useState('');
+  const [aiRefCharId, setAiRefCharId] = useState('');
+  const [aiRefCharBookId, setAiRefCharBookId] = useState('');
+  const [personas, setPersonas] = useState<any[]>([]);
+  const [processCharId, setProcessCharId] = useState<string | null>(null);
 
   const parentRef = useRef<HTMLDivElement>(null);
-  const cols = useCols(parentRef);
 
   useEffect(() => {
     let mounted = true;
     async function loadCharacters() {
       try {
-        const [chars, compactChats] = await Promise.all([
+        const [chars, compactChats, appSettings] = await Promise.all([
           characterOps.getAllCompact(),
           chatOps.getCompact(),
+          settingsOps.get(),
         ]);
+        if (appSettings?.cardSize) setCardSize(appSettings.cardSize);
         const chatTimeMap = new Map<string, number>();
         for (const chat of compactChats) {
           const prev = chatTimeMap.get(chat.characterId) ?? 0;
@@ -90,6 +88,35 @@ export function CharactersPage() {
           setIsLoading(false);
           prewarmAvatars(chars.map(c => c.id));
         }
+        // 加载世界观分组 + 初始化折叠状态
+        worldInfoOps.getAll().then(books => {
+          if (!mounted) return;
+          if (Array.isArray(books)) {
+            setWorldInfoBooks(books);
+            // 默认全部折叠，只展开最近交互角色所在分组
+            const allBookIds = books.map(b => b.id);
+            setCollapsedGroups(new Set(allBookIds));
+            if (chatTimeMap.size > 0) {
+              const recentCharIds = [...chatTimeMap.entries()]
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, 5)
+                .map(([charId]) => charId);
+              const toExpand = new Set<string>();
+              for (const char of chars) {
+                if (recentCharIds.includes(char.id) && char.worldInfoId && books.some(b => b.id === char.worldInfoId)) {
+                  toExpand.add(char.worldInfoId);
+                }
+              }
+              if (toExpand.size > 0) {
+                setCollapsedGroups(prev => {
+                  const next = new Set(prev);
+                  toExpand.forEach(id => next.delete(id));
+                  return next;
+                });
+              }
+            }
+          }
+        }).catch(() => {});
       } catch (error) {
         console.error('[CharactersPage] Failed to load characters:', error);
         if (mounted) setIsLoading(false);
@@ -97,6 +124,9 @@ export function CharactersPage() {
     }
     loadCharacters();
     return () => { mounted = false; };
+  }, []);
+  useEffect(() => {
+    personaOps.getAll().then(p => setPersonas(p)).catch(() => {});
   }, []);
 
   const allTagsWithCounts = useMemo(() => {
@@ -130,7 +160,7 @@ export function CharactersPage() {
       const query = searchQuery.toLowerCase().trim();
       result = result.filter(char =>
         char.name.toLowerCase().includes(query) ||
-        char.tags.some(tag => tag.toLowerCase().includes(query))
+        (char.tags || []).some(tag => tag.toLowerCase().includes(query))
       );
     }
     if (selectedTag !== null) {
@@ -155,37 +185,6 @@ export function CharactersPage() {
     return result;
   }, [characters, searchQuery, sortBy, selectedTag, lastChatTimeByChar]);
 
-  const rows = useMemo(() => {
-    const r: CharacterCard[][] = [];
-    for (let i = 0; i < filteredCharacters.length; i += cols) {
-      r.push(filteredCharacters.slice(i, i + cols));
-    }
-    return r;
-  }, [filteredCharacters, cols]);
-
-  const rowVirtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 240,
-    overscan: 3,
-  });
-
-  const listVirtualizer = useVirtualizer({
-    count: filteredCharacters.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 72,
-    overscan: 5,
-  });
-
-  const gridVirtualItems = rowVirtualizer.getVirtualItems();
-  const listVirtualItems = listVirtualizer.getVirtualItems();
-  useEffect(() => {
-    const ids: string[] = viewMode === 'grid'
-      ? gridVirtualItems.flatMap(vr => rows[vr.index]?.map(c => c.id) ?? [])
-      : listVirtualItems.map(vr => filteredCharacters[vr.index]?.id).filter((id): id is string => !!id);
-    ids.forEach(id => requestAvatar(id));
-  }, [gridVirtualItems, listVirtualItems, viewMode, rows, filteredCharacters]);
-
   const createNewChat = useCallback(async (character: CharacterCard) => {
     let personaId: string | null = null;
     if (character.defaultPersonaId) {
@@ -195,11 +194,18 @@ export function CharactersPage() {
       const defaultPersona = allPersonas.find(p => p.isDefault);
       if (defaultPersona) personaId = defaultPersona.id;
     }
+    // 获取所有启用了"默认关联"的世界书
+    const allWorldInfos = await worldInfoOps.getAll();
+    const enabledWorldInfoIds = allWorldInfos
+      .filter(b => b.enabled && b.autoAssociate !== false)
+      .map(b => b.id);
+
     const newChat: ChatSession = {
       id: generateUUID(),
       characterId: character.id,
       personaId,
       messages: [],
+      enabledWorldInfoIds: enabledWorldInfoIds.length > 0 ? enabledWorldInfoIds : [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -260,23 +266,10 @@ export function CharactersPage() {
     setDeleteConfirm(character.id);
   }, []);
 
-  const toggleSelectMode = useCallback(() => {
-    setSelectMode(prev => !prev);
-    setSelectedIds(new Set());
-  }, []);
-
-  const toggleSelect = useCallback((id: string, e: React.MouseEvent) => {
+  const handleToggleSelectWithStop = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }, []);
-
-  const selectAll = useCallback(() => {
-    setSelectedIds(new Set(filteredCharacters.map(c => c.id)));
-  }, [filteredCharacters]);
+    handleToggleSelect(id);
+  }, [handleToggleSelect]);
 
   const handleDeleteSelected = useCallback(async () => {
     if (selectedIds.size === 0) return;
@@ -284,8 +277,7 @@ export function CharactersPage() {
     try {
       await characterOps.batchDelete([...selectedIds]);
       setCharacters(prev => prev.filter(c => !selectedIds.has(c.id)));
-      setSelectedIds(new Set());
-      setSelectMode(false);
+      clearSelection();
     } catch (err) {
       console.error('Batch delete failed:', err);
     } finally {
@@ -299,8 +291,7 @@ export function CharactersPage() {
     try {
       await characterOps.batchDelete(characters.map(c => c.id));
       setCharacters([]);
-      setSelectedIds(new Set());
-      setSelectMode(false);
+      clearSelection();
     } catch (err) {
       console.error('Delete all failed:', err);
     } finally {
@@ -309,32 +300,156 @@ export function CharactersPage() {
     }
   }, [characters]);
 
+  const handleCloneSelected = useCallback(async () => {
+    if (selectedIds.size !== 1) return;
+    const charId = selectedIds.values().next().value;
+    const char = characters.find(c => c.id === charId);
+    if (!char) return;
+
+    const clone: CharacterCard = {
+      ...char,
+      id: generateUUID(),
+      name: `${char.name}(副本)`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await characterOps.add(clone);
+    useCharacterStore.getState().addCharacter(clone);
+    clearSelection();
+  }, [selectedIds, characters, clearSelection]);
+
   const handleEdit = useCallback((characterId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     navigate(`/characters/${characterId}/edit`);
   }, [navigate]);
 
-  const currentSortLabel = SORT_OPTIONS.find(o => o.value === sortBy)?.label || 'Sort';
+  const handleRelation = useCallback((character: CharacterCard, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRelationModalChar(character);
+  }, []);
+
+  const currentSortLabel = t(SORT_OPTIONS.find(o => o.value === sortBy)?.labelKey || 'characters.sortLabel');
+
+  // 从角色中提取分组（按 worldInfoId 归类）
+  const characterGroups = useMemo(() => {
+    const groupMap = new Map<string, { count: number }>();
+    for (const c of characters) {
+      if (c.worldInfoId) {
+        const existing = groupMap.get(c.worldInfoId);
+        if (existing) existing.count++;
+        else groupMap.set(c.worldInfoId, { count: 1 });
+      }
+    }
+    return groupMap;
+  }, [characters]);
+
+  // ─── AI 创建角色 ──────────────────────────────────────────────────────────────
+
+  async function handleAICreateCharacter() {
+    if (!aiCreateChar || !aiCharName.trim()) return;
+    setAiCharGenerating(true);
+    try {
+      const connection = await connectionOps.getActive();
+      if (!connection) { alert('请先配置 AI 连接'); return; }
+
+      // 获取世界观条目作为上下文
+      const book = worldInfoBooks.find(b => b.id === aiCreateChar.bookId);
+      const worldContext = book ? `世界观「${book.name}」的设定：\n${book.entries.slice(0, 15).map(e => `- ${e.keywords.join(', ')}: ${e.content.slice(0, 150)}`).join('\n')}` : '';
+
+      // 人设参考
+      let personaContext = '';
+      if (aiRefPersonaId) {
+        const persona = personas.find((p: any) => p.id === aiRefPersonaId);
+        if (persona) {
+          personaContext = `参考人设「${persona.name}」的信息：\n描述：${(persona.description || '').slice(0, 200)}\n性格：${(persona.personality || '').slice(0, 100)}`;
+        }
+      }
+
+      // 世界观组参考
+      let bookContext = '';
+      if (aiRefBookId) {
+        const refBook = worldInfoBooks.find(b => b.id === aiRefBookId);
+        if (refBook) {
+          bookContext = `参考世界观组「${refBook.name}」的设定：\n${refBook.entries.slice(0, 10).map(e => `- ${e.keywords.join(', ')}: ${e.content.slice(0, 150)}`).join('\n')}`;
+        }
+      }
+
+      // 角色参考
+      let charRefContext = '';
+      if (aiRefCharId) {
+        const refChar = characters.find(c => c.id === aiRefCharId);
+        if (refChar) {
+          charRefContext = `参考角色「${refChar.name}」的信息：\n描述：${(refChar.description || '').slice(0, 200)}\n性格：${(refChar.personality || '').slice(0, 100)}`;
+        }
+      }
+
+      // 角色组参考
+      let charGroupContext = '';
+      if (aiRefCharBookId) {
+        const refBook = worldInfoBooks.find(b => b.id === aiRefCharBookId);
+        if (refBook) {
+          charGroupContext = `\n参考角色组「${refBook.name}」的设定：\n${refBook.entries.slice(0, 10).map(e => `- ${e.keywords.join(', ')}: ${e.content.slice(0, 150)}`).join('\n')}`;
+        }
+      }
+
+      const prompt = buildCreateCharacterPrompt(worldContext, personaContext, bookContext + charGroupContext, aiCharName, aiCharPrompt, charRefContext);
+
+      const resultText = await callAI(connection, '你是一个角色创作专家。', prompt, { temperature: 0.5, maxTokens: 2048 });
+
+      // 解析并保存角色
+      const result = extractJSON(resultText);
+      const card: any = {
+        id: generateUUID(), name: result.name || aiCharName,
+        description: result.description || '', personality: result.personality || '',
+        scenario: result.scenario || '', firstMessage: result.firstMessage || `*${result.name || aiCharName}出现了*`,
+        tags: [...(result.tags || []), book?.name || ''].filter(Boolean),
+        worldInfoId: aiCreateChar.bookId,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      };
+      await characterOps.add(card);
+      useCharacterStore.getState().addCharacter(card);
+      setAiCreateChar(null);
+      setAiCharName('');
+      setAiCharPrompt('');
+    } catch (e: any) {
+      alert(`创建失败: ${e.message}`);
+    } finally {
+      setAiCharGenerating(false);
+    }
+  }
 
   return (
+    <>
     <div className="flex flex-col h-full overflow-hidden">
       {/* Non-scrolling header area */}
       <div className="flex-shrink-0 px-3 pt-3 md:px-6 md:pt-6">
         {/* Page header */}
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="min-w-0">
-            <h1 className="text-xl sm:text-2xl font-bold text-white font-serif tracking-tight">Characters</h1>
+            <h1 className="text-xl sm:text-2xl font-bold text-white font-serif tracking-tight">{t('characters.title')}</h1>
             <p className="text-gray-600 text-xs sm:text-sm">
-              {filteredCharacters.length} of {characters.length}
+              {t('characters.countOf', { filtered: filteredCharacters.length, total: characters.length })}
             </p>
           </div>
           <div className="flex gap-1.5 sm:gap-2 flex-shrink-0">
             {selectMode ? (
               <>
-                <Button variant="ghost" size="sm" onClick={selectAll} disabled={selectedIds.size === filteredCharacters.length}>
+                <Button variant="ghost" size="sm" onClick={() => handleSelectAll(filteredCharacters)} disabled={selectedIds.size === filteredCharacters.length}>
                   <CheckSquare className="w-4 h-4" />
-                  <span className="hidden sm:inline">Select All</span>
+                  <span className="hidden sm:inline">{t('characters.selectAll')}</span>
                 </Button>
+                {selectedIds.size === 1 && (
+                  <Button variant="ghost" size="sm" onClick={handleCloneSelected}>
+                    <Copy className="w-4 h-4" />
+                    复制
+                  </Button>
+                )}
+                {selectedIds.size === 1 && (
+                  <Button variant="ghost" size="sm" onClick={() => setProcessCharId(selectedIds.values().next().value!)}>
+                    <Sparkles className="w-4 h-4" />
+                    处理
+                  </Button>
+                )}
                 <Button
                   variant="danger"
                   size="sm"
@@ -351,50 +466,35 @@ export function CharactersPage() {
                   onClick={() => setDeleteAllConfirm(true)}
                   disabled={isBatchDeleting || characters.length === 0}
                   className="text-red-400 hover:text-red-300"
-                  title="Delete all characters"
+                  title={t('characters.deleteAll')}
                 >
                   <Trash2 className="w-4 h-4" />
-                  <span className="hidden sm:inline">All</span>
+                  <span className="hidden sm:inline">{t('common.all')}</span>
                 </Button>
                 <Button variant="ghost" size="sm" onClick={toggleSelectMode}>
                   <X className="w-4 h-4" />
-                  <span className="hidden sm:inline">Cancel</span>
+                    <span className="hidden sm:inline">{t('common.cancel')}</span>
                 </Button>
               </>
             ) : (
               <>
-                {/* View mode toggle */}
-                <div className="flex rounded-lg overflow-hidden border border-glass-border">
-                  <button
-                    onClick={() => setViewMode('grid')}
-                    className={`p-1.5 sm:p-2 transition-colors ${viewMode === 'grid' ? 'bg-parlor-500/80 text-white' : 'bg-dark-100 text-gray-600 hover:text-white'}`}
-                    title="Grid view"
-                  >
-                    <LayoutGrid className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => setViewMode('list')}
-                    className={`p-1.5 sm:p-2 transition-colors ${viewMode === 'list' ? 'bg-parlor-500/80 text-white' : 'bg-dark-100 text-gray-600 hover:text-white'}`}
-                    title="List view"
-                  >
-                    <List className="w-3.5 h-3.5" />
-                  </button>
-                </div>
                 {characters.length > 0 && (
-                  <Button variant="ghost" size="sm" onClick={toggleSelectMode} title="Select">
+                  <>
+                  <Button variant="ghost" size="sm" onClick={toggleSelectMode} title={t('characters.select')}>
                     <CheckSquare className="w-4 h-4" />
-                    <span className="hidden sm:inline">Select</span>
+                    <span className="hidden sm:inline">{t('characters.select')}</span>
                   </Button>
+                  <Button variant="secondary" size="sm" onClick={() => navigate('/characters/import')} title={t('common.import')}>
+                    <Upload className="w-4 h-4" />
+                    <span className="hidden sm:inline">{t('common.import')}</span>
+                  </Button>
+                  <Button size="sm" onClick={() => navigate('/characters/new')} title={t('characters.new')}>
+                    <Plus className="w-4 h-4" />
+                    <span className="hidden sm:inline">{t('characters.new')}</span>
+                  </Button>
+                  </>
                 )}
-                <Button variant="secondary" size="sm" onClick={() => navigate('/characters/import')} title="Import">
-                  <Upload className="w-4 h-4" />
-                  <span className="hidden sm:inline">Import</span>
-                </Button>
-                <Button size="sm" onClick={() => navigate('/characters/new')} title="New Character">
-                  <Plus className="w-4 h-4" />
-                  <span className="hidden sm:inline">New</span>
-                </Button>
-              </>
+              </> 
             )}
           </div>
         </div>
@@ -403,7 +503,7 @@ export function CharactersPage() {
         <div className="flex gap-2 mb-3">
           <div className="flex-1 min-w-0">
             <Input
-              placeholder="Search characters..."
+              placeholder={t('characters.searchPlaceholder')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               leftIcon={<Search className="w-4 h-4" />}
@@ -433,7 +533,7 @@ export function CharactersPage() {
                       }`}
                     >
                       {option.icon}
-                      {option.label}
+                      {t(option.labelKey)}
                     </button>
                   ))}
                 </div>
@@ -450,7 +550,7 @@ export function CharactersPage() {
               className="flex items-center gap-1.5 text-xs sm:text-sm text-gray-600 hover:text-white transition-colors flex-shrink-0"
             >
               <Tag className="w-3.5 h-3.5" />
-              <span>{showTags ? 'Hide Tags' : 'Tags'}</span>
+              <span>{showTags ? t('characters.hideTags') : t('characters.showTags')}</span>
               {showTags ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
             </button>
           )}
@@ -468,7 +568,7 @@ export function CharactersPage() {
             <div className="flex gap-2">
               <div className="flex-1 relative min-w-0">
                 <Input
-                  placeholder="Search tags..."
+                  placeholder={t('characters.searchTagsPlaceholder')}
                   value={tagSearch}
                   onChange={(e) => setTagSearch(e.target.value)}
                   leftIcon={<Search className="w-4 h-4" />}
@@ -489,13 +589,13 @@ export function CharactersPage() {
                   className={`px-2.5 py-2 rounded-lg text-xs font-medium transition-all ${
                     tagSortBy === 'alpha' ? 'bg-parlor-500/80 text-white' : 'bg-glass-white text-gray-500 hover:text-white'
                   }`}
-                >A-Z</button>
+                >{t('characters.sortAZShort')}</button>
                 <button
                   onClick={() => setTagSortBy('count')}
                   className={`px-2.5 py-2 rounded-lg text-xs font-medium transition-all ${
                     tagSortBy === 'count' ? 'bg-parlor-500/80 text-white' : 'bg-glass-white text-gray-500 hover:text-white'
                   }`}
-                >Count</button>
+                >{t('characters.sortCount')}</button>
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1">
@@ -505,7 +605,7 @@ export function CharactersPage() {
                   selectedTag === null ? 'bg-parlor-500/80 text-white' : 'bg-glass-white text-gray-500 hover:text-white'
                 }`}
               >
-                All ({characters.length})
+                {t('common.all')} ({characters.length})
               </button>
               {filteredTags.map(({ tag, count }) => (
                 <button
@@ -521,7 +621,7 @@ export function CharactersPage() {
               ))}
             </div>
             {filteredTags.length === 0 && tagSearch && (
-              <p className="text-xs text-gray-600">No tags match "{tagSearch}"</p>
+              <p className="text-xs text-gray-600">{t('characters.noTagsMatch', { query: tagSearch })}</p>
             )}
           </div>
         )}
@@ -539,86 +639,213 @@ export function CharactersPage() {
               <Search className="w-6 h-6 text-gray-600" />
             </div>
             <p className="text-gray-500">
-              {searchQuery || selectedTag ? 'No characters match your filters' : 'No characters yet'}
+              {searchQuery || selectedTag ? t('characters.noMatch') : t('characters.noCharacters')}
             </p>
             {!searchQuery && !selectedTag && (
               <Button className="mt-4" onClick={() => navigate('/characters/new')}>
                 <Plus className="w-4 h-4" />
-                Create your first character
+                {t('characters.createFirst')}
               </Button>
             )}
           </div>
-        ) : viewMode === 'grid' ? (
-          <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
-            {rowVirtualizer.getVirtualItems().map(vRow => {
-              const row = rows[vRow.index];
-              return (
-                <div
-                  key={vRow.key}
-                  data-index={vRow.index}
-                  ref={rowVirtualizer.measureElement}
-                  style={{
-                    position: 'absolute',
-                    top: vRow.start,
-                    left: 0,
-                    width: '100%',
-                    display: 'grid',
-                    gridTemplateColumns: `repeat(${cols}, 1fr)`,
-                    gap: '0.75rem',
-                    paddingBottom: '0.75rem',
-                  }}
-                >
-                  {row.map(character => (
-                    <GridCard
-                      key={character.id}
-                      character={character}
-                      isSelected={selectedIds.has(character.id)}
-                      selectMode={selectMode}
-                      onToggleSelect={toggleSelect}
-                      onClick={handleCharacterClick}
-                      onEdit={handleEdit}
-                      onDelete={confirmDelete}
-                    />
-                  ))}
-                </div>
-              );
-            })}
-          </div>
         ) : (
-          <div style={{ height: listVirtualizer.getTotalSize(), position: 'relative' }}>
-            {listVirtualizer.getVirtualItems().map(vItem => {
-              const character = filteredCharacters[vItem.index];
+          <div className="px-4 pb-4 space-y-4">
+            {(() => {
+              const grouped = new Map<string, CharacterCard[]>();
+              const ungrouped: CharacterCard[] = [];
+
+              for (const char of filteredCharacters) {
+                if (char.worldInfoId && worldInfoBooks.some(b => b.id === char.worldInfoId)) {
+                  const group = grouped.get(char.worldInfoId) || [];
+                  group.push(char);
+                  grouped.set(char.worldInfoId, group);
+                } else {
+                  ungrouped.push(char);
+                }
+              }
+
               return (
-                <div
-                  key={vItem.key}
-                  data-index={vItem.index}
-                  ref={listVirtualizer.measureElement}
-                  style={{ position: 'absolute', top: vItem.start, left: 0, width: '100%', paddingBottom: '0.375rem' }}
-                >
-                  <ListCard
-                    character={character}
-                    isSelected={selectedIds.has(character.id)}
-                    selectMode={selectMode}
-                    onToggleSelect={toggleSelect}
-                    onClick={handleCharacterClick}
-                    onEdit={handleEdit}
-                    onDelete={confirmDelete}
-                  />
+                <>
+                  {Array.from(grouped.entries()).map(([bookId, chars]) => {
+                    const book = worldInfoBooks.find(b => b.id === bookId);
+                    const isCollapsed = collapsedGroups.has(bookId);
+                    return (
+                      <div key={bookId} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                        {/* 卡片头 - 点击切换折叠 */}
+                        <div
+                          className="flex items-center gap-2 px-4 py-3 border-b border-gray-200 dark:border-gray-700 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors select-none"
+                          onClick={() => {
+                            setCollapsedGroups(prev => {
+                              const next = new Set(prev);
+                              if (next.has(bookId)) next.delete(bookId);
+                              else next.add(bookId);
+                              return next;
+                            });
+                          }}
+                        >
+                          <ChevronRight
+                            size={16}
+                            className={`text-gray-400 transition-transform duration-200 shrink-0 ${isCollapsed ? '' : 'rotate-90'}`}
+                          />
+                          <FolderOpen size={16} className="text-parlor-500 shrink-0" />
+                          <h3 className="font-semibold text-sm truncate">{book?.name || '未知分组'}</h3>
+                          <span className="text-xs text-gray-500 shrink-0">({chars.length} 个角色)</span>
+                          <div className="ml-auto flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                            {/* 添加角色按钮 */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setAiCreateChar({ bookId, bookName: book?.name || '' });
+                              }}
+                              className="p-1.5 text-gray-400 hover:text-parlor-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                              title="AI 创建角色"
+                            >
+                              <Sparkles size={14} />
+                            </button>
+                            {/* 关联设置按钮 */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setRelationModalChar(chars[0]);
+                              }}
+                              className="p-1.5 text-gray-400 hover:text-parlor-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                              title="关联设置"
+                            >
+                              <Link2 size={14} />
+                            </button>
+                            {/* 移出分组 */}
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (!confirm(`确定将「${book?.name || '未知分组'}」下的所有角色移出分组？`)) return;
+                                for (const char of chars) {
+                                  await characterOps.update(char.id, { worldInfoId: '' as any });
+                                  useCharacterStore.getState().updateCharacter(char.id, { worldInfoId: '' as any });
+                                }
+                                window.location.reload();
+                              }}
+                              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                              title="移出分组"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                        {/* 卡片主体：角色网格（折叠时隐藏） */}
+                        {!isCollapsed && (
+                          <div className="p-3">
+                            <div className={viewMode === 'grid'
+                              ? 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-3'
+                              : 'space-y-2'
+                            }>
+                              {chars.map(char => (
+                                viewMode === 'grid' ? (
+                                  <GridCard
+                                    key={char.id}
+                                    character={char}
+                                    cardSize={cardSize}
+                                    isSelected={selectedIds.has(char.id)}
+                                    selectMode={selectMode}
+                                    onToggleSelect={handleToggleSelectWithStop}
+                                    onClick={handleCharacterClick}
+                                    onEdit={handleEdit}
+                                    onDelete={confirmDelete}
+                                    onRelation={handleRelation}
+                                  />
+                                ) : (
+                                  <ListCard
+                                    key={char.id}
+                                    character={char}
+                                    isSelected={selectedIds.has(char.id)}
+                                    selectMode={selectMode}
+                                    onToggleSelect={handleToggleSelectWithStop}
+                                    onClick={handleCharacterClick}
+                                    onEdit={handleEdit}
+                                    onDelete={confirmDelete}
+                                    onRelation={handleRelation}
+                              />
+                            )
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
-          </div>
-        )}
-      </div>
+            {ungrouped.length > 0 && (
+                    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                      <div
+                        className="flex items-center gap-2 px-4 py-3 border-b border-gray-200 dark:border-gray-700 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors select-none"
+                        onClick={() => {
+                          setCollapsedGroups(prev => {
+                            const next = new Set(prev);
+                            if (next.has('__ungrouped__')) next.delete('__ungrouped__');
+                            else next.add('__ungrouped__');
+                            return next;
+                          });
+                        }}
+                      >
+                        <ChevronRight
+                          size={16}
+                          className={`text-gray-400 transition-transform duration-200 shrink-0 ${collapsedGroups.has('__ungrouped__') ? '' : 'rotate-90'}`}
+                        />
+                        <h3 className="font-semibold text-sm text-gray-500">未分组</h3>
+                        <span className="text-xs text-gray-500">({ungrouped.length} 个角色)</span>
+                      </div>
+                      {!collapsedGroups.has('__ungrouped__') && (
+                      <div className="p-3">
+                        <div className={viewMode === 'grid'
+                          ? 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-3'
+                          : 'space-y-2'
+                        }>
+                          {ungrouped.map(char => (
+                            viewMode === 'grid' ? (
+                              <GridCard
+                                key={char.id}
+                                character={char}
+                                cardSize={cardSize}
+                                isSelected={selectedIds.has(char.id)}
+                                selectMode={selectMode}
+                                onToggleSelect={handleToggleSelectWithStop}
+                                onClick={handleCharacterClick}
+                                onEdit={handleEdit}
+                                onDelete={confirmDelete}
+                                onRelation={handleRelation}
+                              />
+                            ) : (
+                              <ListCard
+                                key={char.id}
+                                character={char}
+                                isSelected={selectedIds.has(char.id)}
+                                selectMode={selectMode}
+                                onToggleSelect={handleToggleSelectWithStop}
+                                onClick={handleCharacterClick}
+                                onEdit={handleEdit}
+                                onDelete={confirmDelete}
+                                onRelation={handleRelation}
+                              />
+                            )
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </div>
+      )}
+    </div>
 
       {/* Delete Confirmation Dialogs */}
       <ConfirmDialog
         isOpen={!!deleteConfirm}
         onClose={() => { setDeleteConfirm(null); setCharacterToDelete(null); }}
         onConfirm={() => deleteConfirm && handleDeleteCharacter(deleteConfirm)}
-        title="Delete Character"
-        message={`Are you sure you want to delete "${characterToDelete?.name}"? This will also delete all chats with this character. This action cannot be undone.`}
-        confirmText="Delete"
+        title={t('characters.deleteConfirm')}
+        message={t('characters.deleteConfirm', { name: characterToDelete?.name || '' })}
+        confirmText={t('common.delete')}
         variant="danger"
       />
 
@@ -626,9 +853,9 @@ export function CharactersPage() {
         isOpen={deleteSelectedConfirm}
         onClose={() => setDeleteSelectedConfirm(false)}
         onConfirm={handleDeleteSelected}
-        title="Delete Selected Characters"
-        message={`Delete ${selectedIds.size} character${selectedIds.size !== 1 ? 's' : ''} and all their chats? This cannot be undone.`}
-        confirmText={isBatchDeleting ? 'Deleting...' : `Delete ${selectedIds.size}`}
+        title={t('chatsList.deleteSelectedTitle', { count: selectedIds.size })}
+        message={t('chatsList.deleteSelectedConfirm', { count: selectedIds.size })}
+        confirmText={isBatchDeleting ? t('common.loading') : t('common.delete')}
         variant="danger"
       />
 
@@ -636,24 +863,93 @@ export function CharactersPage() {
         isOpen={deleteAllConfirm}
         onClose={() => setDeleteAllConfirm(false)}
         onConfirm={handleDeleteAll}
-        title="Delete All Characters"
-        message={`This will permanently delete all ${characters.length} character${characters.length !== 1 ? 's' : ''} and every chat associated with them. This cannot be undone.`}
-        confirmText={isBatchDeleting ? 'Deleting...' : `Delete All ${characters.length}`}
+        title={t('characters.deleteAll')}
+        message={t('characters.deleteAllConfirm')}
+        confirmText={isBatchDeleting ? t('common.loading') : t('characters.deleteAll')}
         variant="danger"
       />
+      {relationModalChar && (
+        <RelationModal
+          character={relationModalChar}
+          allCharacters={filteredCharacters}
+          onSave={async (relations) => {
+            await fetch(`/api/characters/${relationModalChar.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ relations }),
+            });
+            useCharacterStore.getState().updateCharacter(relationModalChar.id, { relations });
+          }}
+          onClose={() => setRelationModalChar(null)}
+        />
+      )}
+
+      {/* AI 创建角色弹窗 */}
+      {aiCreateChar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setAiCreateChar(null)}>
+          <div className="bg-white dark:bg-gray-800 rounded-xl border w-full max-w-md mx-4 p-4" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold text-sm mb-1">AI 创建角色 — {aiCreateChar.bookName}</h3>
+            <p className="text-xs text-gray-500 mb-3">将基于世界观设定和你的要求生成角色</p>
+            <input value={aiCharName} onChange={e => setAiCharName(e.target.value)} placeholder="角色名称（必填）" className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900 mb-2" />
+            <select value={aiRefPersonaId} onChange={e => setAiRefPersonaId(e.target.value)} className="w-full mb-2 px-3 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900">
+              <option value="">不参考人设</option>
+              {personas.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <select value={aiRefBookId} onChange={e => setAiRefBookId(e.target.value)} className="w-full mb-2 px-3 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900">
+              <option value="">参考世界观组</option>
+              {worldInfoBooks.filter(b => b.id !== aiCreateChar?.bookId).map(b => <option key={b.id} value={b.id}>{b.name}（{b.entries.length}条目）</option>)}
+            </select>
+            <select value={aiRefCharBookId} onChange={e => setAiRefCharBookId(e.target.value)} className="w-full mb-2 px-3 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900">
+              <option value="">参考角色组</option>
+              {Array.from(characterGroups.entries())
+                .filter(([id]) => id !== aiCreateChar?.bookId)
+                .map(([id, { count }]) => {
+                  const book = worldInfoBooks.find(b => b.id === id);
+                  return <option key={id} value={id}>{book?.name || '未命名分组'}（{count}个角色）</option>;
+                })}
+            </select>
+            <select value={aiRefCharId} onChange={e => setAiRefCharId(e.target.value)} className="w-full mb-2 px-3 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900">
+              <option value="">参考角色</option>
+              {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <textarea value={aiCharPrompt} onChange={e => setAiCharPrompt(e.target.value)} placeholder="补充要求（可选）：角色定位、性格特点、能力等..." className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900 mb-3" rows={3} />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setAiCreateChar(null)} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-lg">取消</button>
+              <button onClick={handleAICreateCharacter} disabled={aiCharGenerating || !aiCharName.trim()} className="px-4 py-2 text-sm bg-parlor-500 text-white rounded-lg disabled:opacity-50">
+                {aiCharGenerating ? '生成中...' : 'AI 创建'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+    {processCharId && (() => {
+      const char = characters.find(c => c.id === processCharId);
+      if (!char) return null;
+      return createPortal(
+        <CharacterProcessModal
+          character={char}
+          onClose={() => setProcessCharId(null)}
+          onComplete={() => { setProcessCharId(null); clearSelection(); }}
+        />,
+        document.body
+      );
+    })()}
+    </>
   );
 }
 
 // ─── Shared props ────────────────────────────────────────────────────────────
 interface CardProps {
   character: CharacterCard;
+  cardSize?: 'small' | 'medium' | 'large';
   isSelected: boolean;
   selectMode: boolean;
   onToggleSelect: (id: string, e: React.MouseEvent) => void;
   onClick: (id: string) => void;
   onEdit: (id: string, e: React.MouseEvent) => void;
   onDelete: (character: CharacterCard, e: React.MouseEvent) => void;
+  onRelation: (character: CharacterCard, e: React.MouseEvent) => void;
 }
 
 function useCharacterAvatar(id: string): string | undefined {
@@ -669,13 +965,14 @@ function useCharacterAvatar(id: string): string | undefined {
 
 // ─── Grid card ──────────────────────────────────────────────────────────────
 const GridCard = memo(function GridCard({
-  character, isSelected, selectMode,
-  onToggleSelect, onClick, onEdit, onDelete,
+  character, cardSize, isSelected, selectMode,
+  onToggleSelect, onClick, onEdit, onDelete, onRelation,
 }: CardProps) {
   const avatar = useCharacterAvatar(character.id);
+  const cardHeight = CARD_HEIGHT_MAP[cardSize || 'medium'];
   return (
     <div
-      className={`character-card group ${selectMode ? 'cursor-pointer' : ''} ${isSelected ? 'ring-1 ring-parlor-500/60' : ''}`}
+      className={`character-card group ${cardHeight} overflow-hidden ${selectMode ? 'cursor-pointer' : ''} ${isSelected ? 'ring-1 ring-parlor-500/60' : ''}`}
       onClick={selectMode ? (e) => onToggleSelect(character.id, e) : () => onClick(character.id)}
     >
       {selectMode ? (
@@ -687,6 +984,13 @@ const GridCard = memo(function GridCard({
         </div>
       ) : (
         <div className="absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex gap-1 z-10">
+          <button
+            onClick={(e) => onRelation(character, e)}
+            className="p-1.5 rounded-lg bg-dark-200/90 hover:bg-dark-100 text-gray-500 hover:text-white transition-colors"
+            title="关联设置"
+          >
+            <Link2 className="w-3.5 h-3.5" />
+          </button>
           <button
             onClick={(e) => onEdit(character.id, e)}
             className="p-1.5 rounded-lg bg-dark-200/90 hover:bg-dark-100 text-gray-500 hover:text-white transition-colors"
@@ -722,7 +1026,7 @@ const GridCard = memo(function GridCard({
 // ─── List card ──────────────────────────────────────────────────────────────
 const ListCard = memo(function ListCard({
   character, isSelected, selectMode,
-  onToggleSelect, onClick, onEdit, onDelete,
+  onToggleSelect, onClick, onEdit, onDelete, onRelation,
 }: CardProps) {
   const avatar = useCharacterAvatar(character.id);
   return (
@@ -750,6 +1054,13 @@ const ListCard = memo(function ListCard({
       </div>
       {!selectMode && (
         <div className="flex gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0">
+          <button
+            onClick={(e) => onRelation(character, e)}
+            className="p-1.5 rounded-lg bg-dark-200/90 hover:bg-dark-100 text-gray-500 hover:text-white transition-colors"
+            title="关联设置"
+          >
+            <Link2 className="w-3.5 h-3.5" />
+          </button>
           <button
             onClick={(e) => onEdit(character.id, e)}
             className="p-1.5 rounded-lg bg-dark-200/90 hover:bg-dark-100 text-gray-500 hover:text-white transition-colors"

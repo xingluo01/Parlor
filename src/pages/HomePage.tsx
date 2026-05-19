@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import {
   MessageSquare,
@@ -31,14 +32,14 @@ function getLastMessagePreview(chat: ChatSession, maxLen = 120): string {
   return '';
 }
 
-function formatTime(timestamp: number) {
+function formatTime(timestamp: number, t: (key: string, opts?: Record<string, unknown>) => string) {
   const date = new Date(timestamp);
   const now = new Date();
   const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
 
-  if (diffDays === 0) return 'Today';
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return `${diffDays} days ago`;
+  if (diffDays === 0) return t('chatsList.today');
+  if (diffDays === 1) return t('chatsList.yesterday');
+  if (diffDays < 7) return t('chatsList.daysAgo', { days: diffDays });
   return date.toLocaleDateString();
 }
 
@@ -57,6 +58,7 @@ const fadeUp = {
 
 export function HomePage() {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { setActiveChat } = useChatStore();
   const [allChats, setAllChats] = useState<ChatSession[]>([]);
   const [characters, setCharacters] = useState<CharacterCard[]>([]);
@@ -176,23 +178,23 @@ export function HomePage() {
             <div className="absolute inset-0 rounded-2xl bg-parlor-500/10 animate-pulse-soft" />
           </div>
           <h1 className="text-4xl font-bold text-white font-serif mb-3 tracking-tight">
-            Welcome to Parlor
+            {t('home.welcome')}
           </h1>
-          <p className="text-gray-400 mb-2 text-lg leading-relaxed">Your private stage for conversation.</p>
+          <p className="text-gray-400 mb-2 text-lg leading-relaxed">{t('home.subtitle')}</p>
           <p className="text-sm text-gray-600 mb-8 leading-relaxed">
-            Create your first character or import one to begin.
+            {t('home.emptyDescription')}
           </p>
           <div className="flex gap-3 justify-center">
             <Link to="/characters/new">
               <Button size="lg">
                 <Plus className="w-5 h-5" />
-                Create Character
+                {t('home.createCharacter')}
               </Button>
             </Link>
             <Link to="/characters/import">
               <Button variant="secondary" size="lg">
                 <Download className="w-5 h-5" />
-                Import
+                {t('common.import')}
               </Button>
             </Link>
           </div>
@@ -214,8 +216,8 @@ export function HomePage() {
     >
       {/* Header */}
       <motion.div variants={fadeUp} className="pt-2">
-        <h1 className="text-3xl sm:text-4xl font-bold text-white font-serif tracking-tight">Welcome back</h1>
-        <p className="text-gray-600 mt-1 text-sm">Pick up where you left off</p>
+        <h1 className="text-3xl sm:text-4xl font-bold text-white font-serif tracking-tight">{t('home.welcomeBack')}</h1>
+        <p className="text-gray-600 mt-1 text-sm">{t('home.pickUpWhereYouLeft')}</p>
       </motion.div>
 
       {/* Hero Chat */}
@@ -230,16 +232,16 @@ export function HomePage() {
               <div className="relative flex items-start gap-4">
                 <Avatar
                   src={avatarMap[heroCharacter?.id ?? '']}
-                  name={heroCharacter?.name || 'Unknown'}
+                  name={heroCharacter?.name || t('common.unknown')}
                   size="lg"
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-accent-500" />
-                    <span className="text-2xs text-accent-500 font-semibold uppercase tracking-[0.1em]">Continue</span>
+                    <span className="text-2xs text-accent-500 font-semibold uppercase tracking-[0.1em]">{t('home.continueLabel')}</span>
                   </div>
                   <p className="font-semibold text-white text-lg font-serif tracking-tight truncate">
-                    {heroCharacter?.name || 'Unknown Character'}
+                    {heroCharacter?.name || t('common.unknownCharacter')}
                   </p>
                   {heroChat.title && (
                     <p className="text-xs text-gray-600 truncate mt-0.5">{heroChat.title}</p>
@@ -248,8 +250,8 @@ export function HomePage() {
                     {getLastMessagePreview(heroChat)}
                   </p>
                 </div>
-                <span className="text-2xs text-gray-600 shrink-0 pt-1 tracking-wide">
-                  {formatTime(heroChat.updatedAt)}
+                    <span className="text-2xs text-gray-600 shrink-0 pt-1 tracking-wide">
+                  {formatTime(heroChat.updatedAt, t)}
                 </span>
               </div>
             </div>
@@ -261,10 +263,10 @@ export function HomePage() {
       {recentChats.length > 0 && (
         <motion.div variants={fadeUp}>
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold text-white font-serif tracking-tight">Recent Chats</h2>
+            <h2 className="text-lg font-semibold text-white font-serif tracking-tight">{t('home.recentChats')}</h2>
             <Link to="/chats">
               <Button variant="ghost" size="sm" className="text-xs">
-                View All
+                {t('home.viewAll')}
                 <ArrowRight className="w-3.5 h-3.5" />
               </Button>
             </Link>
@@ -277,19 +279,19 @@ export function HomePage() {
                   <div className="bg-dark-200/80 border border-glass-border p-3 rounded-xl hover:border-parlor-500/10 transition-all flex items-center gap-3 group">
                     <Avatar
                       src={avatarMap[character?.id ?? '']}
-                      name={character?.name || 'Unknown'}
+                      name={character?.name || t('common.unknown')}
                       size="md"
                     />
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-gray-200 truncate text-sm">
-                        {character?.name || 'Unknown Character'}
+                        {character?.name || t('common.unknownCharacter')}
                       </p>
                       <p className="text-xs text-gray-600 line-clamp-1 mt-0.5">
                         {getLastMessagePreview(chat, 100)}
                       </p>
                     </div>
                     <span className="text-2xs text-gray-700 shrink-0 tracking-wide">
-                      {formatTime(chat.updatedAt)}
+                      {formatTime(chat.updatedAt, t)}
                     </span>
                   </div>
                 </Link>
@@ -302,9 +304,9 @@ export function HomePage() {
       {/* Stats */}
       <motion.div variants={fadeUp} className="grid grid-cols-3 gap-3">
         {[
-          { value: stats.characters, label: 'Characters' },
-          { value: stats.chats, label: 'Chats' },
-          { value: stats.messages, label: 'Messages' },
+          { value: stats.characters, label: t('home.totalCharacters') },
+          { value: stats.chats, label: t('home.totalChats') },
+          { value: stats.messages, label: t('home.totalMessages') },
         ].map((stat) => (
           <div
             key={stat.label}
@@ -321,19 +323,19 @@ export function HomePage() {
         <Link to="/characters">
           <div className="bg-dark-200/60 border border-glass-border p-4 rounded-xl hover:border-parlor-500/10 transition-all group cursor-pointer text-center">
             <MessageSquare className="w-5 h-5 text-parlor-400 mb-2 mx-auto group-hover:scale-110 transition-transform" />
-            <p className="text-xs font-medium text-gray-400">New Chat</p>
+            <p className="text-xs font-medium text-gray-400">{t('nav.newChat')}</p>
           </div>
         </Link>
         <Link to="/characters/new">
           <div className="bg-dark-200/60 border border-glass-border p-4 rounded-xl hover:border-parlor-500/10 transition-all group cursor-pointer text-center">
             <Plus className="w-5 h-5 text-parlor-400 mb-2 mx-auto group-hover:scale-110 transition-transform" />
-            <p className="text-xs font-medium text-gray-400">Create</p>
+            <p className="text-xs font-medium text-gray-400">{t('common.create')}</p>
           </div>
         </Link>
         <Link to="/characters/import">
           <div className="bg-dark-200/60 border border-glass-border p-4 rounded-xl hover:border-parlor-500/10 transition-all group cursor-pointer text-center">
             <Download className="w-5 h-5 text-parlor-400 mb-2 mx-auto group-hover:scale-110 transition-transform" />
-            <p className="text-xs font-medium text-gray-400">Import</p>
+            <p className="text-xs font-medium text-gray-400">{t('common.import')}</p>
           </div>
         </Link>
       </motion.div>
@@ -342,10 +344,10 @@ export function HomePage() {
       {featured.length > 0 && (
         <motion.div variants={fadeUp}>
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold text-white font-serif tracking-tight">Your Characters</h2>
+            <h2 className="text-lg font-semibold text-white font-serif tracking-tight">{t('home.yourCharacters')}</h2>
             <Link to="/characters">
               <Button variant="ghost" size="sm" className="text-xs">
-                View All
+                {t('home.viewAll')}
                 <ArrowRight className="w-3.5 h-3.5" />
               </Button>
             </Link>
@@ -362,7 +364,7 @@ export function HomePage() {
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-gray-200 truncate text-sm">{char.name}</p>
                     <p className="text-2xs text-gray-700 truncate">
-                      {char.tags?.[0] || 'No tags'}
+                      {char.tags?.[0] || t('home.noTags')}
                     </p>
                   </div>
                 </div>

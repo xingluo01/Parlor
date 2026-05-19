@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { User, Bot, BookOpen, UserCircle, Edit3, X } from 'lucide-react';
 import { Button, Avatar } from '../ui';
 import type { CharacterCard } from '../../types';
@@ -10,6 +11,7 @@ interface CharacterPanelProps {
 }
 
 export function CharacterPanel({ character, onClose }: CharacterPanelProps) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
 
   return (
@@ -22,7 +24,7 @@ export function CharacterPanel({ character, onClose }: CharacterPanelProps) {
     >
       {/* Header */}
       <div className="sticky top-0 bg-dark-200/95 backdrop-blur-md border-b border-glass-border p-4 flex items-center justify-between">
-        <h2 className="font-semibold text-white font-serif tracking-tight">Character Info</h2>
+        <h2 className="font-semibold text-white font-serif tracking-tight">{t('chat.characterPanel.title')}</h2>
         <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-glass-white transition-colors">
           <X className="w-4 h-4 text-gray-500" />
         </button>
@@ -50,7 +52,7 @@ export function CharacterPanel({ character, onClose }: CharacterPanelProps) {
           <div>
             <h4 className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-2 uppercase tracking-[0.1em]">
               <User className="w-3.5 h-3.5" />
-              Description
+              {t('chat.characterPanel.description')}
             </h4>
             <p className="text-sm text-gray-400 whitespace-pre-wrap leading-relaxed">{character.description}</p>
           </div>
@@ -61,7 +63,7 @@ export function CharacterPanel({ character, onClose }: CharacterPanelProps) {
           <div>
             <h4 className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-2 uppercase tracking-[0.1em]">
               <Bot className="w-3.5 h-3.5" />
-              Personality
+              {t('chat.characterPanel.personality')}
             </h4>
             <p className="text-sm text-gray-400 whitespace-pre-wrap leading-relaxed">{character.personality}</p>
           </div>
@@ -72,7 +74,7 @@ export function CharacterPanel({ character, onClose }: CharacterPanelProps) {
           <div>
             <h4 className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-2 uppercase tracking-[0.1em]">
               <BookOpen className="w-3.5 h-3.5" />
-              Scenario
+              {t('chat.characterPanel.scenario')}
             </h4>
             <p className="text-sm text-gray-400 whitespace-pre-wrap leading-relaxed">{character.scenario}</p>
           </div>
@@ -83,7 +85,7 @@ export function CharacterPanel({ character, onClose }: CharacterPanelProps) {
           <div>
             <h4 className="text-xs font-medium text-gray-500 mb-2 flex items-center gap-2 uppercase tracking-[0.1em]">
               <BookOpen className="w-3.5 h-3.5" />
-              Lorebook ({character.characterBook.entries.filter(e => e.enabled).length} entries)
+              {t('chat.characterPanel.lorebook', { count: character.characterBook.entries.filter(e => e.enabled).length })}
             </h4>
             <div className="space-y-2 max-h-40 overflow-y-auto">
               {character.characterBook.entries.filter(e => e.enabled).slice(0, 5).map((entry) => (
@@ -110,7 +112,7 @@ export function CharacterPanel({ character, onClose }: CharacterPanelProps) {
             onClick={() => { onClose(); navigate(`/characters/${character.id}`); }}
           >
             <UserCircle className="w-4 h-4" />
-            View Full Profile
+            {t('chat.characterPanel.viewFullProfile')}
           </Button>
           <Button
             variant="ghost"
@@ -118,7 +120,7 @@ export function CharacterPanel({ character, onClose }: CharacterPanelProps) {
             onClick={() => { onClose(); navigate(`/characters/${character.id}/edit`); }}
           >
             <Edit3 className="w-4 h-4" />
-            Edit Character
+            {t('chat.characterPanel.editCharacter')}
           </Button>
         </div>
       </div>

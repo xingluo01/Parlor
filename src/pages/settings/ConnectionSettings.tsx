@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { generateUUID } from '../../utils/uuid';
 import {
   Plus,
@@ -21,6 +22,7 @@ export function ConnectionSettings({
   connections: ConnectionProfile[];
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<ConnectionProfile | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -28,7 +30,7 @@ export function ConnectionSettings({
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-white font-serif tracking-tight">API Connections</h2>
+        <h2 className="text-lg font-semibold text-white font-serif tracking-tight">{t('settings.connection.title')}</h2>
         <Button
           size="sm"
           onClick={() => {
@@ -37,18 +39,18 @@ export function ConnectionSettings({
           }}
         >
           <Plus className="w-4 h-4" />
-          Add Connection
+          {t('settings.connection.addConnection')}
         </Button>
       </div>
 
       {connections.length === 0 ? (
         <div className="text-center py-8">
           <p className="text-gray-500 mb-4">
-            No connections configured. Add an API connection to start chatting.
+            {t('settings.connection.noConnections')}
           </p>
           <Button onClick={() => setIsModalOpen(true)}>
             <Plus className="w-4 h-4" />
-            Add Your First Connection
+            {t('settings.connection.addConnection')}
           </Button>
         </div>
       ) : (
@@ -102,9 +104,9 @@ export function ConnectionSettings({
             setDeleteConfirm(null);
           }
         }}
-        title="Delete Connection"
-        message="Are you sure you want to delete this connection?"
-        confirmText="Delete"
+        title={t('settings.connection.deleteConnection')}
+        message={t('settings.connection.deleteConnection') + '?'}
+        confirmText={t('common.delete')}
         variant="danger"
       />
     </div>
@@ -125,6 +127,7 @@ function ConnectionCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation();
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
 
@@ -160,7 +163,7 @@ function ConnectionCard({
             <h3 className="font-medium text-white">{connection.name}</h3>
             {isActive && (
               <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
-                Active
+                {t('common.enabled')}
               </span>
             )}
           </div>
@@ -172,7 +175,7 @@ function ConnectionCard({
               {testResult.success ? (
                 <>
                   <CheckCircle className="w-4 h-4" />
-                  Connection successful
+                  {t('settings.connection.connectionSuccess')}
                 </>
               ) : (
                 <>
@@ -193,12 +196,12 @@ function ConnectionCard({
             {isTesting ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
-              'Test'
+              t('settings.connection.testConnection')
             )}
           </Button>
           {!isActive && (
             <Button variant="secondary" size="sm" onClick={onSetActive}>
-              Set Active
+              {t('settings.connection.setActive')}
             </Button>
           )}
           <Button variant="ghost" size="sm" onClick={onEdit}>
@@ -225,8 +228,9 @@ export function ConnectionModal({
   connection: ConnectionProfile | null;
   onSave: (data: Partial<ConnectionProfile>) => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
-  const [provider, setProvider] = useState<APIProvider>('openai');
+  const [provider, setProvider] = useState<APIProvider>('deepseek');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
   const [endpoint, setEndpoint] = useState('');
@@ -237,7 +241,7 @@ export function ConnectionModal({
 
   // Fetch models when provider or apiKey changes (debounced to avoid per-keystroke requests)
   useEffect(() => {
-    const shouldLoad = provider === 'ollama' || provider === 'lmstudio' || (provider !== 'custom' && apiKey);
+    const shouldLoad = provider === 'deepseek' && apiKey;
     if (!shouldLoad) return;
     const timer = setTimeout(() => loadModels(), 500);
     return () => clearTimeout(timer);
@@ -252,16 +256,16 @@ export function ConnectionModal({
       setModel(connection.model);
       setEndpoint(connection.endpoint || '');
       // Load models for existing connection
-      if (connection.apiKey || connection.provider === 'ollama' || connection.provider === 'lmstudio') {
+      if (connection.provider === 'deepseek' && connection.apiKey) {
         loadModelsForConnection(connection.provider, connection.apiKey, connection.endpoint);
       }
     } else {
       setName('');
-      setProvider('openai');
+      setProvider('deepseek');
       setApiKey('');
-      setModel(DEFAULT_MODELS.openai[0]);
+      setModel(DEFAULT_MODELS.deepseek[0]);
       setEndpoint('');
-      setAvailableModels(DEFAULT_MODELS.openai.map(id => ({ id })));
+      setAvailableModels(DEFAULT_MODELS.deepseek.map(id => ({ id })));
     }
     setShowCustomModel(false);
   }, [connection, isOpen]);
@@ -269,7 +273,17 @@ export function ConnectionModal({
   const loadModelsForConnection = async (prov: APIProvider, key: string, customEndpoint?: string) => {
     setIsLoadingModels(true);
     try {
-      const models = await fetchAvailableModels(prov, key, customEndpoint);
+      const models = await fetchAvailableModels({
+        provider: prov,
+        apiKey: key,
+        endpoint: customEndpoint,
+        model: '',
+        id: '',
+        name: '',
+        isActive: false,
+        createdAt: 0,
+        updatedAt: 0,
+      });
       setAvailableModels(models);
       // If current model not in list, show custom input
       if (connection && !models.find(m => m.id === connection.model)) {
@@ -284,18 +298,21 @@ export function ConnectionModal({
   };
 
   const loadModels = async () => {
-    if (provider !== 'ollama' && provider !== 'lmstudio' && !apiKey.trim()) return;
+    if (provider !== 'deepseek' || !apiKey.trim()) return;
     await loadModelsForConnection(provider, apiKey, endpoint);
   };
 
   const handleProviderChange = (newProvider: APIProvider) => {
     setProvider(newProvider);
-    setAvailableModels(DEFAULT_MODELS[newProvider]?.map(id => ({ id })) || []);
-    setModel(DEFAULT_MODELS[newProvider]?.[0] || '');
+    if (newProvider === 'deepseek') {
+      setAvailableModels(DEFAULT_MODELS.deepseek.map(id => ({ id })));
+      setModel(DEFAULT_MODELS.deepseek[0]);
+    } else {
+      setAvailableModels([]);
+      setModel('');
+    }
     setShowCustomModel(false);
-    if (newProvider === 'ollama') setEndpoint('http://localhost:11434/v1/chat/completions');
-    else if (newProvider === 'lmstudio') setEndpoint('http://localhost:1234/v1/chat/completions');
-    else if (newProvider !== 'custom') setEndpoint('');
+    if (newProvider !== 'custom') setEndpoint('');
   };
 
   const handleSave = async () => {
@@ -308,7 +325,7 @@ export function ConnectionModal({
         provider,
         apiKey,
         model: model.trim(),
-        endpoint: ['custom', 'ollama', 'lmstudio'].includes(provider) ? endpoint : undefined,
+        endpoint: provider === 'custom' ? endpoint : undefined,
         isActive: connection?.isActive || false,
       });
     } finally {
@@ -320,85 +337,69 @@ export function ConnectionModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={connection ? 'Edit Connection' : 'New Connection'}
+      title={connection ? t('settings.connection.saveConnection') : t('settings.connection.addConnection')}
       size="md"
     >
       <div className="space-y-4">
         <Input
-          label="Connection Name"
+          label={t('settings.connection.addConnection')}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="My OpenAI Connection"
+          placeholder={t('settings.connection.connectionNamePlaceholder')}
         />
 
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-1.5">
-            Provider
-          </label>
+            <label className="block text-sm font-medium text-gray-300 mb-1.5">
+              {t('settings.connection.provider')}
+            </label>
           <select
             value={provider}
             onChange={(e) => handleProviderChange(e.target.value as APIProvider)}
             className="w-full px-4 py-2.5 rounded-lg bg-dark-100 border border-glass-border text-white focus:outline-none focus:border-parlor-500/50"
           >
-            <option value="openai">OpenAI</option>
-            <option value="anthropic">Anthropic</option>
-            <option value="openrouter">OpenRouter</option>
-            <option value="gemini">Google Gemini</option>
-            <option value="mistral">Mistral AI</option>
-            <option value="groq">Groq</option>
             <option value="deepseek">DeepSeek</option>
-            <option value="glm">GLM (Zhipu AI)</option>
             <option value="custom">Custom Endpoint</option>
-            <option value="ollama">Ollama (Local)</option>
-            <option value="lmstudio">LM Studio (Local)</option>
           </select>
         </div>
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="block text-sm font-medium text-gray-300">API Key</label>
-            {(provider === 'ollama' || provider === 'lmstudio' || (provider !== 'custom' && apiKey)) && !isLoadingModels && (
+            <label className="block text-sm font-medium text-gray-300">{t('settings.connection.apiKey')}</label>
+            {(provider === 'deepseek' && apiKey) && !isLoadingModels && (
               <button
                 type="button"
                 onClick={loadModels}
                 className="text-xs text-parlor-400 hover:text-parlor-300"
               >
-                Refresh Models
+                {t('settings.connection.fetchModels')}
               </button>
             )}
           </div>
           <Input
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={provider === 'custom' || provider === 'ollama' || provider === 'lmstudio' ? 'Optional' : 'sk-...'}
+            placeholder={provider === 'custom' ? t('settings.connection.apiKeyOptional') : 'sk-...'}
             type="password"
           />
-          {(provider === 'ollama' || provider === 'lmstudio') && (
-            <p className="text-xs text-gray-500 mt-1">No API key required for local models.</p>
-          )}
         </div>
 
-        {(provider === 'custom' || provider === 'ollama' || provider === 'lmstudio') && (
+        {provider === 'custom' && (
           <Input
-            label="Endpoint"
+            label={t('settings.connection.endpoint')}
             value={endpoint}
             onChange={(e) => setEndpoint(e.target.value)}
-            placeholder={
-              provider === 'ollama'
-                ? 'http://localhost:11434/v1/chat/completions'
-                : 'http://localhost:1234/v1/chat/completions'
-            }
+            placeholder="http://localhost:1234/v1/chat/completions"
           />
         )}
 
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1.5">
-            Model
+            {t('settings.connection.model')}
           </label>
           {isLoadingModels ? (
             <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-dark-100 border border-glass-border">
               <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-              <span className="text-gray-400">Loading models...</span>
+              <span className="text-gray-400">{t('common.loading')}</span>
             </div>
           ) : availableModels.length > 0 ? (
             <>
@@ -418,13 +419,13 @@ export function ConnectionModal({
                 {availableModels.map((m) => (
                   <option key={m.id} value={m.id}>{m.name || m.id}</option>
                 ))}
-                <option value="_custom">Custom model...</option>
+                <option value="_custom">{t('settings.connection.customModel')}</option>
               </select>
               {showCustomModel && (
                 <Input
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  placeholder="Enter model name"
+                  placeholder={t('settings.connection.enterModelName')}
                   className="mt-2"
                   autoFocus
                 />
@@ -437,19 +438,14 @@ export function ConnectionModal({
               placeholder="model-name"
             />
           )}
-          {provider === 'openrouter' && !apiKey && (
-            <p className="text-xs text-gray-500 mt-1">
-              Enter an API key to load available models from OpenRouter.
-            </p>
-          )}
         </div>
 
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button onClick={handleSave} isLoading={isLoading} disabled={!name.trim() || !model.trim()}>
-            {connection ? 'Save Changes' : 'Create Connection'}
+            {connection ? t('common.save') : t('common.create')}
           </Button>
         </div>
       </div>

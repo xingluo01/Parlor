@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
@@ -21,12 +22,15 @@ import type { CharacterCard, GroupChat, GroupMember } from '../types';
 
 // ─── Turn mode descriptions ─────────────────────────────────────────────────
 
-const TURN_MODES = [
-  { value: 'natural' as const, label: 'Natural', desc: 'AI decides who speaks based on context and talkativeness' },
-  { value: 'list' as const, label: 'List', desc: 'Characters take turns in the order listed' },
-  { value: 'random' as const, label: 'Random', desc: 'A random character is chosen each turn, weighted by talkativeness' },
-  { value: 'manual' as const, label: 'Manual', desc: 'You choose which character responds each turn' },
-];
+function getTurnModes(t: (key: string, opts?: Record<string, unknown>) => string) {
+  return [
+    { value: 'natural' as const, label: t('groups.turnModeNatural'), desc: t('groups.turnNaturalDesc') },
+    { value: 'sequential' as const, label: t('groups.turnModeSequential'), desc: t('groups.turnSequentialDesc') },
+    { value: 'list' as const, label: t('groups.turnModeList'), desc: t('groups.turnListDesc') },
+    { value: 'random' as const, label: t('groups.turnModeRandom'), desc: t('groups.turnRandomDesc') },
+    { value: 'manual' as const, label: t('groups.turnModeManual'), desc: t('groups.turnManualDesc') },
+  ];
+}
 
 // ─── Avatar hook (per-key subscription) ─────────────────────────────────────
 
@@ -57,6 +61,7 @@ function MemberRow({
   onActiveToggle: () => void;
   onRemove: () => void;
 }) {
+  const { t } = useTranslation();
   const avatar = useCharacterAvatar(member.characterId);
 
   return (
@@ -77,12 +82,12 @@ function MemberRow({
 
       <div className="flex-1 min-w-0">
         <p className="text-white text-sm font-medium truncate">
-          {character?.name || 'Unknown Character'}
+          {character?.name || t('common.unknownCharacter')}
         </p>
 
         {/* Talkativeness slider */}
         <div className="flex items-center gap-2 mt-1">
-          <span className="text-xs text-gray-500 w-20 flex-shrink-0">Talkativeness</span>
+          <span className="text-xs text-gray-500 w-20 flex-shrink-0">{t('groups.talkativeness')}</span>
           <input
             type="range"
             min={0}
@@ -103,7 +108,7 @@ function MemberRow({
       <button
         onClick={onActiveToggle}
         className="flex-shrink-0 transition-colors"
-        title={member.isActive ? 'Active — click to deactivate' : 'Inactive — click to activate'}
+        title={member.isActive ? t('groups.activeHint') : t('groups.inactiveHint')}
       >
         {member.isActive ? (
           <ToggleRight className="w-6 h-6 text-parlor-400" />
@@ -116,7 +121,7 @@ function MemberRow({
       <button
         onClick={onRemove}
         className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 hover:text-red-400"
-        title="Remove from group"
+        title={t('groups.removeHint')}
       >
         <X className="w-4 h-4" />
       </button>
@@ -137,6 +142,7 @@ function CharacterPicker({
   onSelect: (id: string) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -174,7 +180,7 @@ function CharacterPicker({
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search characters..."
+              placeholder={t('groups.searchCharacters')}
               className="w-full bg-dark-100 border border-glass-border rounded-lg pl-8 pr-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-parlor-500/50"
             />
           </div>
@@ -183,7 +189,7 @@ function CharacterPicker({
         <div className="overflow-y-auto flex-1">
           {filtered.length === 0 ? (
             <div className="p-4 text-center text-gray-500 text-sm">
-              {query ? 'No matching characters' : 'All characters already added'}
+              {query ? t('groups.noMatchingChars') : t('groups.allAdded')}
             </div>
           ) : (
             filtered.map((char) => (
@@ -226,11 +232,13 @@ function CharacterPickerRow({
 // ─── Main page component ────────────────────────────────────────────────────
 
 export function GroupChatEditorPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { id } = useParams();
   const isEditing = Boolean(id);
 
   const [name, setName] = useState('');
+  const turnModes = getTurnModes(t);
   const [turnMode, setTurnMode] = useState<GroupChat['turnMode']>('natural');
   const [members, setMembers] = useState<GroupMember[]>([]);
 
@@ -278,7 +286,7 @@ export function GroupChatEditorPage() {
           setMembers(group.members);
         }
       } catch {
-        if (!cancelled) setError('Failed to load data');
+        if (!cancelled) setError(t('groups.failedToLoad'));
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -317,11 +325,11 @@ export function GroupChatEditorPage() {
 
   const handleSave = async () => {
     if (!name.trim()) {
-      setError('Group name is required');
+      setError(t('groups.nameRequired'));
       return;
     }
     if (members.length < 2) {
-      setError('A group chat needs at least 2 members');
+      setError(t('groups.needTwoMembers'));
       return;
     }
 
@@ -354,7 +362,7 @@ export function GroupChatEditorPage() {
         navigate(`/group/${groupId}`);
       }
     } catch {
-      setError('Failed to save group chat');
+      setError(t('groups.failedToSave'));
     } finally {
       setIsSaving(false);
     }
@@ -382,16 +390,16 @@ export function GroupChatEditorPage() {
           </Button>
           <div>
             <h1 className="text-2xl font-bold text-white font-serif tracking-tight">
-              {isEditing ? 'Edit Group' : 'Create Group'}
+              {isEditing ? t('groups.editGroupTitle') : t('groups.createGroup')}
             </h1>
             <p className="text-gray-600 text-sm mt-1">
-              {isEditing ? 'Modify group chat settings' : 'Set up a new group conversation'}
+              {isEditing ? t('groups.editSubtitle') : t('groups.createSubtitle')}
             </p>
           </div>
         </div>
         <Button onClick={handleSave} isLoading={isSaving}>
           <Save className="w-4 h-4" />
-          Save
+          {t('groups.save')}
         </Button>
       </div>
 
@@ -405,13 +413,13 @@ export function GroupChatEditorPage() {
       {/* Group Name */}
       <div className="glass p-6 mb-4">
         <label className="block text-sm font-medium text-gray-300 mb-1.5">
-          Group Name
+          {t('groups.groupName')}
         </label>
         <input
           type="text"
           value={name}
           onChange={(e) => { setName(e.target.value); setError(null); }}
-          placeholder="Enter a name for this group..."
+          placeholder={t('groups.groupNamePlaceholder')}
           className="w-full bg-dark-100/50 backdrop-blur-sm border border-glass-border rounded-lg px-4 py-2.5 text-white placeholder-gray-400 focus:outline-none focus:border-parlor-500 focus:ring-1 focus:ring-parlor-500/50 transition-all duration-200"
         />
       </div>
@@ -419,7 +427,7 @@ export function GroupChatEditorPage() {
       {/* Turn Mode */}
       <div className="glass p-6 mb-4">
         <label className="block text-sm font-medium text-gray-300 mb-1.5">
-          Turn Mode
+          {t('groups.turnMode')}
         </label>
         <div className="relative">
           <button
@@ -428,10 +436,10 @@ export function GroupChatEditorPage() {
           >
             <div className="text-left">
               <span className="text-sm font-medium">
-                {TURN_MODES.find((m) => m.value === turnMode)?.label}
+                {turnModes.find((m) => m.value === turnMode)?.label}
               </span>
               <span className="text-xs text-gray-500 ml-2">
-                {TURN_MODES.find((m) => m.value === turnMode)?.desc}
+                {turnModes.find((m) => m.value === turnMode)?.desc}
               </span>
             </div>
             <ChevronDown
@@ -447,7 +455,7 @@ export function GroupChatEditorPage() {
                 exit={{ opacity: 0, y: -4 }}
                 className="absolute z-10 top-full left-0 right-0 mt-1 bg-dark-100 border border-glass-border rounded-xl shadow-dramatic overflow-hidden"
               >
-                {TURN_MODES.map((mode) => (
+                {turnModes.map((mode) => (
                   <button
                     key={mode.value}
                     onClick={() => { setTurnMode(mode.value); setTurnModeOpen(false); }}
@@ -473,7 +481,7 @@ export function GroupChatEditorPage() {
           <div className="flex items-center gap-2">
             <Users className="w-4 h-4 text-parlor-400" />
             <h2 className="text-lg font-medium text-white font-serif tracking-tight">
-              Members
+              {t('groups.members')}
             </h2>
             <span className="text-xs text-gray-500">
               ({members.length})
@@ -486,7 +494,7 @@ export function GroupChatEditorPage() {
               onClick={() => setShowPicker(!showPicker)}
             >
               <Plus className="w-4 h-4" />
-              Add
+              {t('groups.addMember')}
             </Button>
             <AnimatePresence>
               {showPicker && (
@@ -523,9 +531,9 @@ export function GroupChatEditorPage() {
           {members.length === 0 && (
             <div className="text-center py-10 text-gray-500">
               <Users className="w-10 h-10 mx-auto mb-3 opacity-40" />
-              <p className="text-sm">No members yet</p>
+              <p className="text-sm">{t('groups.noMembers')}</p>
               <p className="text-xs mt-1 text-gray-600">
-                Add at least 2 characters to start a group chat
+                {t('groups.noMembersHint')}
               </p>
             </div>
           )}

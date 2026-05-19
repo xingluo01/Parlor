@@ -15,6 +15,7 @@ export {
   connectionOps,
   presetOps,
   regexOps,
+  authorNoteOps,
   lorebookOps,
   worldInfoOps,
   settingsOps,
@@ -22,3 +23,5 @@ export {
   groupChatOps,
   dataBankOps,
 } from '../services/apiClient';
+
+export { getCombinedAuthorNotePresets } from '../services/apiClient';

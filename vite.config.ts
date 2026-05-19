@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import react from '@vitejs/plugin-react-swc'
 import { spawn } from 'child_process'
 
 // Plugin to start the REST API server
@@ -35,5 +35,18 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+  build: {
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'ui-vendor': ['framer-motion', 'lucide-react'],
+          'state-vendor': ['zustand'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 600,
   },
 })

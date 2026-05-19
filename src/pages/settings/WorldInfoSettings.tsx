@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { generateUUID } from '../../utils/uuid';
 import {
   Plus,
@@ -37,6 +38,8 @@ function EntryModal({
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [matchWholeWords, setMatchWholeWords] = useState(false);
   const [insertionOrder, setInsertionOrder] = useState(100);
+
+  const { t } = useTranslation();
 
   useEffect(() => {
     if (isOpen) {
@@ -86,15 +89,15 @@ function EntryModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={entry ? 'Edit Entry' : 'New Entry'}
+      title={entry ? t('settings.worldInfo.editEntry') : t('settings.worldInfo.newEntry')}
       size="md"
     >
       <div className="space-y-4">
         <Input
-          label="Keywords (comma-separated)"
+          label={t('settings.worldInfo.keywords')}
           value={keywords}
           onChange={(e) => setKeywords(e.target.value)}
-          placeholder="e.g. dragon, fire drake, wyrm"
+          placeholder={t('settings.worldInfo.keywordsPlaceholder')}
         />
 
         <div>
@@ -105,15 +108,15 @@ function EntryModal({
               onChange={(e) => setSelective(e.target.checked)}
               className="rounded border-glass-border bg-dark-100 text-parlor-500"
             />
-            <span className="text-sm text-gray-300">Selective (require secondary keywords)</span>
+            <span className="text-sm text-gray-300">{t('settings.worldInfo.selective')}</span>
           </label>
           {selective && (
             <div className="space-y-2">
               <Input
-                label="Secondary Keywords (comma-separated)"
+                label={t('settings.worldInfo.secondaryKeywords')}
                 value={secondaryKeywords}
                 onChange={(e) => setSecondaryKeywords(e.target.value)}
-                placeholder="secondary1, secondary2"
+                placeholder={t('settings.worldInfo.secondaryKeywordsPlaceholder')}
               />
               <div className="flex gap-2">
                 <button
@@ -122,7 +125,7 @@ function EntryModal({
                     selectiveLogic === 'AND' ? 'bg-parlor-600 text-white' : 'bg-dark-100 text-gray-400 border border-glass-border'
                   }`}
                 >
-                  AND (all must match)
+                  {t('settings.worldInfo.andMatch')}
                 </button>
                 <button
                   onClick={() => setSelectiveLogic('OR')}
@@ -130,7 +133,7 @@ function EntryModal({
                     selectiveLogic === 'OR' ? 'bg-parlor-600 text-white' : 'bg-dark-100 text-gray-400 border border-glass-border'
                   }`}
                 >
-                  OR (any can match)
+                  {t('settings.worldInfo.orMatch')}
                 </button>
               </div>
             </div>
@@ -138,10 +141,10 @@ function EntryModal({
         </div>
 
         <Textarea
-          label="Content"
+          label={t('settings.worldInfo.content')}
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          placeholder="Content injected when keywords are found in context…"
+          placeholder={t('settings.worldInfo.contentPlaceholder')}
           rows={5}
         />
         <div className="flex items-center gap-6 flex-wrap">
@@ -152,7 +155,7 @@ function EntryModal({
               onChange={(e) => setEnabled(e.target.checked)}
               className="rounded border-glass-border bg-dark-100 text-parlor-500"
             />
-            <span className="text-sm text-gray-300">Enabled</span>
+            <span className="text-sm text-gray-300">{t('settings.worldInfo.enabled')}</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -161,7 +164,7 @@ function EntryModal({
               onChange={(e) => setCaseSensitive(e.target.checked)}
               className="rounded border-glass-border bg-dark-100 text-parlor-500"
             />
-            <span className="text-sm text-gray-300">Case sensitive</span>
+            <span className="text-sm text-gray-300">{t('settings.worldInfo.caseSensitive')}</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -170,11 +173,11 @@ function EntryModal({
               onChange={(e) => setMatchWholeWords(e.target.checked)}
               className="rounded border-glass-border bg-dark-100 text-parlor-500"
             />
-            <span className="text-sm text-gray-300">Match whole words</span>
+            <span className="text-sm text-gray-300">{t('settings.worldInfo.matchWholeWords')}</span>
           </label>
         </div>
         <div className="flex items-center gap-3">
-          <label className="text-sm font-medium text-gray-300 w-36">Insertion order</label>
+          <label className="text-sm font-medium text-gray-300 w-36">{t('settings.worldInfo.insertionOrder')}</label>
           <input
             type="number"
             value={insertionOrder}
@@ -183,10 +186,10 @@ function EntryModal({
           />
         </div>
         <div className="flex justify-end gap-3 pt-2">
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="ghost" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={handleSave} disabled={!canSave}>
             <Save className="w-4 h-4" />
-            Save
+            {t('common.save')}
           </Button>
         </div>
       </div>
@@ -201,6 +204,7 @@ export function WorldInfoSettings({
   books: WorldInfo[];
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   const [expandedBookId, setExpandedBookId] = useState<string | null>(null);
   const [editingEntry, setEditingEntry] = useState<{ bookId: string; entry: LorebookEntry | null } | null>(null);
   const [deleteBookConfirm, setDeleteBookConfirm] = useState<string | null>(null);
@@ -256,19 +260,18 @@ export function WorldInfoSettings({
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-white font-serif tracking-tight">World Info</h2>
+        <h2 className="text-lg font-semibold text-white font-serif tracking-tight">{t('settings.tabs.worldInfo')}</h2>
         <Button
           size="sm"
           onClick={() => setShowNewBook(true)}
         >
           <Plus className="w-4 h-4" />
-          New Book
+          {t('settings.worldInfo.newBook')}
         </Button>
       </div>
 
       <p className="text-gray-500 text-sm mb-4">
-        World Info books inject lore into the context when keywords appear in the conversation.
-        Books can be toggled globally here, or per-chat from the chat header.
+        {t('settings.worldInfo.bookDesc')}
       </p>
 
       {/* New book inline form */}
@@ -278,7 +281,7 @@ export function WorldInfoSettings({
           <Input
             value={newBookName}
             onChange={(e) => setNewBookName(e.target.value)}
-            placeholder="Book name…"
+            placeholder={t('settings.worldInfo.bookNamePlaceholder')}
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleCreateBook();
               if (e.key === 'Escape') { setShowNewBook(false); setNewBookName(''); }
@@ -287,7 +290,7 @@ export function WorldInfoSettings({
             className="flex-1"
           />
           <Button size="sm" onClick={handleCreateBook} disabled={!newBookName.trim()}>
-            Create
+            {t('settings.worldInfo.create')}
           </Button>
           <Button
             variant="ghost"
@@ -302,7 +305,7 @@ export function WorldInfoSettings({
       {books.length === 0 ? (
         <div className="text-center py-8">
           <BookOpen className="w-8 h-8 text-gray-600 mx-auto mb-2" />
-          <p className="text-gray-500">No World Info books yet. Create one to get started.</p>
+          <p className="text-gray-500">{t('settings.worldInfo.noBooks')}</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -321,7 +324,7 @@ export function WorldInfoSettings({
                     <button
                       onClick={async () => handleToggleBook(book.id, !book.enabled)}
                       className="flex-shrink-0 text-gray-400 hover:text-white transition-colors"
-                      title={book.enabled ? 'Disable globally' : 'Enable globally'}
+                      title={book.enabled ? t('settings.worldInfo.disableGlobally') : t('settings.worldInfo.enableGlobally')}
                     >
                       {book.enabled
                         ? <ToggleRight className="w-5 h-5 text-parlor-400" />
@@ -331,7 +334,7 @@ export function WorldInfoSettings({
                       {book.name}
                     </span>
                     <span className="text-xs text-gray-500 flex-shrink-0">
-                      {enabledEntries}/{book.entries.length} entries
+                      {t('settings.worldInfo.entriesCount', { enabled: enabledEntries, total: book.entries.length })}
                     </span>
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
@@ -339,7 +342,7 @@ export function WorldInfoSettings({
                       variant="ghost"
                       size="sm"
                       onClick={() => setExpandedBookId(isExpanded ? null : book.id)}
-                      title={isExpanded ? 'Collapse' : 'Edit entries'}
+                      title={isExpanded ? t('settings.worldInfo.collapse') : t('settings.worldInfo.editEntries')}
                     >
                       {isExpanded
                         ? <ChevronDown className="w-4 h-4" />
@@ -359,20 +362,20 @@ export function WorldInfoSettings({
                 {isExpanded && (
                   <div className="border-t border-glass-border">
                     <div className="p-3 flex items-center justify-between">
-                      <span className="text-xs text-gray-500 uppercase tracking-wider">Entries</span>
+                      <span className="text-xs text-gray-500 uppercase tracking-wider">{t('settings.worldInfo.entries')}</span>
                       <Button
                         size="sm"
                         variant="secondary"
                         onClick={() => setEditingEntry({ bookId: book.id, entry: null })}
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        Add Entry
+                        {t('settings.worldInfo.addEntry')}
                       </Button>
                     </div>
 
                     {book.entries.length === 0 ? (
                       <div className="px-4 pb-4 text-sm text-gray-500 text-center">
-                        No entries yet. Add one to inject lore when keywords match.
+                        {t('settings.worldInfo.noEntries')}
                       </div>
                     ) : (
                       <div className="space-y-2 px-3 pb-3">
@@ -454,9 +457,9 @@ export function WorldInfoSettings({
             setDeleteBookConfirm(null);
           }
         }}
-        title="Delete Book"
-        message="Are you sure you want to delete this World Info book and all its entries?"
-        confirmText="Delete"
+        title={t('settings.worldInfo.deleteBook')}
+        message={t('settings.worldInfo.deleteBookConfirm')}
+        confirmText={t('common.delete')}
         variant="danger"
       />
 
@@ -470,9 +473,9 @@ export function WorldInfoSettings({
             setDeleteEntryConfirm(null);
           }
         }}
-        title="Delete Entry"
-        message="Are you sure you want to delete this lore entry?"
-        confirmText="Delete"
+        title={t('settings.worldInfo.deleteEntry')}
+        message={t('settings.worldInfo.deleteEntryConfirm')}
+        confirmText={t('common.delete')}
         variant="danger"
       />
     </div>

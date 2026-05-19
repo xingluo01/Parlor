@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import {
   Download,
   Key,
+  NotebookPen,
   Settings as SettingsIcon,
   Zap,
   Code,
   BookOpen,
   Palette,
   RefreshCw,
+  Globe,
 } from 'lucide-react';
 import { backupOps, connectionOps, presetOps, regexOps, settingsOps, worldInfoOps } from '../db';
 import { saveAs } from 'file-saver';
@@ -22,13 +25,20 @@ import { GeneralSettings } from './settings/GeneralSettings';
 import { WorldInfoSettings } from './settings/WorldInfoSettings';
 import { ThemeSettings } from './settings/ThemeSettings';
 import { SyncSettings } from './settings/SyncSettings';
+import { TranslationSettings } from './settings/TranslationSettings';
+import { AuthorNoteSettings } from './settings/AuthorNoteSettings';
 
-type SettingsTab = 'connection' | 'presets' | 'regex' | 'worldInfo' | 'backup' | 'general' | 'theme' | 'sync';
+type SettingsTab = 'connection' | 'presets' | 'regex' | 'worldInfo' | 'backup' | 'translation' | 'general' | 'theme' | 'sync' | 'authorNotes';
 
 export function SettingsPage() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<SettingsTab>('connection');
-  const { connections, setConnections, setActiveConnection } = useConnectionStore();
-  const { presets, setPresets, setActivePreset } = usePresetStore();
+  const connections = useConnectionStore(s => s.connections);
+  const setConnections = useConnectionStore(s => s.setConnections);
+  const setActiveConnection = useConnectionStore(s => s.setActiveConnection);
+  const presets = usePresetStore(s => s.presets);
+  const setPresets = usePresetStore(s => s.setPresets);
+  const setActivePreset = usePresetStore(s => s.setActivePreset);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [regexes, setRegexes] = useState<RegexScript[]>([]);
   const [worldInfoBooks, setWorldInfoBooks] = useState<WorldInfo[]>([]);
@@ -83,24 +93,32 @@ export function SettingsPage() {
     }
   };
 
+  const handleUpdateSetting = async (key: string, value: any) => {
+    await settingsOps.update({ [key]: value } as Partial<AppSettings>);
+    const updated = await settingsOps.get();
+    setSettings(updated || null);
+  };
+
   const tabs = [
-    { id: 'connection' as const, label: 'Connection', icon: Key },
-    { id: 'presets' as const, label: 'Presets', icon: Zap },
-    { id: 'regex' as const, label: 'Regex', icon: Code },
-    { id: 'worldInfo' as const, label: 'World Info', icon: BookOpen },
-    { id: 'backup' as const, label: 'Backup', icon: Download },
-    { id: 'theme' as const, label: 'Theme', icon: Palette },
-    { id: 'sync' as const, label: 'Sync', icon: RefreshCw },
-    { id: 'general' as const, label: 'General', icon: SettingsIcon },
+    { id: 'connection' as const, label: t('settings.tabs.connection'), icon: Key },
+    { id: 'presets' as const, label: t('settings.tabs.presets'), icon: Zap },
+    { id: 'regex' as const, label: t('settings.tabs.regex'), icon: Code },
+    { id: 'worldInfo' as const, label: t('settings.tabs.worldInfo'), icon: BookOpen },
+    { id: 'backup' as const, label: t('settings.tabs.backup'), icon: Download },
+    { id: 'authorNotes' as const, label: '作者备注', icon: NotebookPen },
+    { id: 'theme' as const, label: t('settings.tabs.theme'), icon: Palette },
+    { id: 'sync' as const, label: t('settings.tabs.sync'), icon: RefreshCw },
+    { id: 'translation' as const, label: t('settings.tabs.translation'), icon: Globe },
+    { id: 'general' as const, label: t('settings.tabs.general'), icon: SettingsIcon },
   ];
 
   return (
     <div className="p-4 md:p-8">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold text-white font-serif tracking-tight">Settings</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold text-white font-serif tracking-tight">{t('settings.title')}</h1>
         <p className="text-gray-600 text-sm mt-1">
-          Configure your Parlor experience
+          {t('settings.subtitle')}
         </p>
       </div>
 
@@ -212,6 +230,7 @@ export function SettingsPage() {
                 onFullBackup={handleFullBackup}
               />
             )}
+            {activeTab === 'authorNotes' && <AuthorNoteSettings />}
             {activeTab === 'theme' && (
               <ThemeSettings
                 settings={settings}
@@ -230,6 +249,12 @@ export function SettingsPage() {
                   const updated = await settingsOps.get();
                   setSettings(updated || null);
                 }}
+              />
+            )}
+            {activeTab === 'translation' && (
+              <TranslationSettings
+                settings={settings ?? undefined}
+                onUpdate={handleUpdateSetting}
               />
             )}
             {activeTab === 'general' && (

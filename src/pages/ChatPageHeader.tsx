@@ -1,5 +1,6 @@
 
 import { useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -22,10 +23,19 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button, Avatar } from '../components/ui';
 import type { CharacterCard, ChatSession, Persona, WorldInfo } from '../types';
+import { sanitizeFilename } from '../utils/fileExport';
+
+type SessionMeta = {
+  totalTokens: number;
+  totalTimeMs: number;
+  currentTimeMs: number;
+  msgCount: number;
+} | null;
 
 type ChatPageHeaderProps = {
   character: CharacterCard;
   activeChat: ChatSession;
+  sessionMeta?: SessionMeta;
   persona: Persona | null;
   personas: Persona[];
   showPersonaMenu: boolean;
@@ -62,12 +72,13 @@ function triggerDownload(content: string, filename: string, mime: string) {
 }
 
 function buildSafeFilename(base: string, ext: string) {
-  return `${base.replace(/[^a-z0-9_\- ]/gi, '_').trim()}.${ext}`;
+  return `${sanitizeFilename(base)}.${ext}`;
 }
 
 export function ChatPageHeader({
   character,
   activeChat,
+  sessionMeta,
   persona,
   personas,
   showPersonaMenu,
@@ -93,6 +104,7 @@ export function ChatPageHeader({
   onShowConversationTree,
 }: ChatPageHeaderProps) {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const actionsMenuRef = useRef<HTMLDivElement>(null);
 
   // Close actions menu on outside click/touch (reliable on mobile)
@@ -108,7 +120,7 @@ export function ChatPageHeader({
   }, [showActionsMenu, setShowActionsMenu]);
 
   const userName = persona?.name || 'User';
-  const chatTitle = activeChat.title || `${character.name} Chat`;
+  const chatTitle = activeChat.title || t('chat.header.chatTitle', { character: character.name });
   const exportDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
   const handleExportMarkdown = () => {
@@ -183,8 +195,14 @@ export function ChatPageHeader({
             <div className="text-left min-w-0">
               <h1 className="font-semibold text-white text-sm sm:text-base truncate font-serif tracking-tight">{character.name}</h1>
               <p className="text-2xs text-gray-600 truncate max-w-[120px] sm:max-w-none">
-                {activeChat.title || `${activeChat.messages.length} messages`}
+                {activeChat.title || t('chat.header.messagesCount', { count: activeChat.messages.length })}
               </p>
+              {sessionMeta && (
+                <div className="flex items-center gap-2 text-[10px] text-gray-500 mt-0.5">
+                  <span>🪙 {sessionMeta.totalTokens.toLocaleString()} tokens</span>
+                  <span>⏱ 当前 {(sessionMeta.currentTimeMs / 1000).toFixed(1)}s / 总计 {(sessionMeta.totalTimeMs / 1000).toFixed(1)}s</span>
+                </div>
+              )}
             </div>
           </button>
         </div>
@@ -196,7 +214,7 @@ export function ChatPageHeader({
               variant="ghost"
               size="sm"
               onClick={() => setShowPersonaMenu(!showPersonaMenu)}
-              title={persona?.name || 'No Persona'}
+              title={persona?.name || t('chat.header.noPersona')}
               className="hidden sm:flex items-center gap-1 p-1.5"
             >
               <Users className="w-4 h-4" />
@@ -218,7 +236,7 @@ export function ChatPageHeader({
                     className={dropdownClass}
                   >
                     <div className="px-3 py-2 text-2xs text-gray-600 uppercase tracking-[0.1em] border-b border-glass-border">
-                      Select Persona
+                      {t('chat.header.selectPersona')}
                     </div>
 
                     {charDefault && (
@@ -228,7 +246,7 @@ export function ChatPageHeader({
                       >
                         <Avatar src={charDefault.avatar} name={charDefault.name} size="xs" />
                         <span className="truncate flex-1">{charDefault.name}</span>
-                        <span className="text-2xs text-parlor-400">Linked</span>
+                        <span className="text-2xs text-parlor-400">{t('chat.header.linked')}</span>
                       </button>
                     )}
 
@@ -239,7 +257,7 @@ export function ChatPageHeader({
                       <div className="w-6 h-6 rounded-full bg-dark-50 flex items-center justify-center">
                         <User className="w-3 h-3" />
                       </div>
-                      No Persona
+                      {t('chat.header.noPersona')}
                     </button>
 
                     {personas.map((p) => (
@@ -251,14 +269,14 @@ export function ChatPageHeader({
                         <Avatar src={p.avatar} name={p.name} size="xs" />
                         <span className="truncate">{p.name}</span>
                         {p.isDefault && (
-                          <span className="text-2xs text-gray-600 ml-auto">Default</span>
+                          <span className="text-2xs text-gray-600 ml-auto">{t('chat.header.default')}</span>
                         )}
                       </button>
                     ))}
 
                     {personas.length === 0 && (
                       <div className="px-3 py-2 text-sm text-gray-600">
-                        No personas created yet
+                        {t('chat.header.noPersonasCreated')}
                       </div>
                     )}
 
@@ -269,14 +287,14 @@ export function ChatPageHeader({
                             onClick={() => { onLinkPersonaToCharacter(null); setShowPersonaMenu(false); }}
                             className={dropdownItemClass}
                           >
-                            Unlink "{persona.name}" from {character.name}
+                            {t('chat.header.unlinkPersona', { persona: persona.name, character: character.name })}
                           </button>
                         ) : (
                           <button
                             onClick={() => { onLinkPersonaToCharacter(persona.id); setShowPersonaMenu(false); }}
                             className="w-full px-3 py-2 text-left text-sm text-parlor-400 hover:text-parlor-300 hover:bg-glass-white transition-colors"
                           >
-                            Link "{persona.name}" to {character.name}
+                            {t('chat.header.linkPersona', { persona: persona.name, character: character.name })}
                           </button>
                         )}
                       </div>
@@ -289,7 +307,7 @@ export function ChatPageHeader({
                         }}
                         className="w-full px-3 py-2 text-left text-sm text-parlor-400 hover:text-parlor-300 hover:bg-glass-white transition-colors"
                       >
-                        Manage Personas...
+                        {t('chat.header.managePersonas')}
                       </button>
                     </div>
                   </motion.div>
@@ -303,7 +321,7 @@ export function ChatPageHeader({
             variant="ghost"
             size="sm"
             onClick={onToggleBookmarks}
-            title="Bookmarks"
+            title={t('chat.header.bookmarks')}
             className={`hidden sm:flex p-1.5 ${showBookmarks || bookmarkCount > 0 ? 'text-accent-500' : ''}`}
           >
             <Bookmark className={`w-4 h-4 ${bookmarkCount > 0 ? 'fill-accent-500' : ''}`} />
@@ -316,7 +334,7 @@ export function ChatPageHeader({
                 variant="ghost"
                 size="sm"
                 onClick={() => setShowWorldInfoMenu(!showWorldInfoMenu)}
-                title="World Info"
+                title={t('chat.header.worldInfo')}
                 className={`p-1.5 ${worldInfoBooks.some(b => {
                   if (!b.enabled) return false;
                   if (enabledWorldInfoIds === undefined) return true;
@@ -341,7 +359,7 @@ export function ChatPageHeader({
                       className="absolute right-0 top-full mt-1 z-50 bg-dark-100 border border-glass-border rounded-xl py-1 min-w-[220px] shadow-dramatic"
                     >
                       <div className="px-3 py-2 text-2xs text-gray-600 uppercase tracking-[0.1em] border-b border-glass-border">
-                        World Info — this chat
+                        {t('chat.header.worldInfoThisChat')}
                       </div>
                       {worldInfoBooks.filter(b => b.enabled).map((book) => {
                         const isActive = enabledWorldInfoIds === undefined || enabledWorldInfoIds.includes(book.id);
@@ -359,14 +377,14 @@ export function ChatPageHeader({
                             />
                             <span className="truncate flex-1">{book.name}</span>
                             <span className="text-2xs text-gray-600 flex-shrink-0">
-                              {book.entries.filter(e => e.enabled).length} entries
+                              {t('chat.header.entriesCount', { count: book.entries.filter(e => e.enabled).length })}
                             </span>
                           </button>
                         );
                       })}
                       {worldInfoBooks.filter(b => b.enabled).length === 0 && (
                         <div className="px-3 py-2 text-sm text-gray-600">
-                          No enabled books
+                          {t('chat.header.noEnabledBooks')}
                         </div>
                       )}
                     </motion.div>
@@ -402,21 +420,21 @@ export function ChatPageHeader({
                       className={`${dropdownItemClass} sm:hidden`}
                     >
                       <Users className="w-4 h-4" />
-                      {persona ? `Persona: ${persona.name}` : 'Select Persona'}
+                      {persona ? t('chat.header.personaLabel', { name: persona.name }) : t('chat.header.selectPersona')}
                     </button>
                     <button
                       onClick={() => { setShowActionsMenu(false); onToggleBookmarks(); }}
                       className={`${dropdownItemClass} sm:hidden`}
                     >
                       <Bookmark className={`w-4 h-4 ${bookmarkCount > 0 ? 'fill-accent-500 text-accent-500' : ''}`} />
-                      Bookmarks{bookmarkCount > 0 ? ` (${bookmarkCount})` : ''}
+                      {t('chat.header.bookmarks')}{bookmarkCount > 0 ? ` (${bookmarkCount})` : ''}
                     </button>
                     <button
                       onClick={() => { setShowActionsMenu(false); setShowParamsPanel(true); }}
                       className={`${dropdownItemClass} sm:hidden`}
                     >
                       <Sliders className="w-4 h-4" />
-                      Chat Parameters
+                      {t('chat.header.chatParameters')}
                     </button>
                     <div className="border-t border-glass-border my-1 sm:hidden" />
 
@@ -428,7 +446,7 @@ export function ChatPageHeader({
                       className={dropdownItemClass}
                     >
                       <UserCircle className="w-4 h-4" />
-                      View Character
+                      {t('chat.header.viewCharacter')}
                     </button>
                     <button
                       onClick={() => {
@@ -438,7 +456,7 @@ export function ChatPageHeader({
                       className={dropdownItemClass}
                     >
                       <Edit3 className="w-4 h-4" />
-                      Edit Character
+                      {t('chat.header.editCharacter')}
                     </button>
                     <button
                       onClick={() => {
@@ -448,7 +466,7 @@ export function ChatPageHeader({
                       className={dropdownItemClass}
                     >
                       <MessageSquarePlus className="w-4 h-4" />
-                      New Chat
+                      {t('chat.header.newChat')}
                     </button>
                     {activeChat.branchedFromChatId && (
                       <button
@@ -459,7 +477,7 @@ export function ChatPageHeader({
                         className={dropdownItemClass}
                       >
                         <GitBranch className="w-4 h-4" />
-                        View Parent Chat
+                        {t('chat.header.viewParentChat')}
                       </button>
                     )}
                     <button
@@ -470,7 +488,7 @@ export function ChatPageHeader({
                       className={dropdownItemClass}
                     >
                       <FolderOpen className="w-4 h-4" />
-                      All Chats
+                      {t('chat.header.allChats')}
                     </button>
                     {onShowConversationTree && (
                       <button
@@ -478,7 +496,7 @@ export function ChatPageHeader({
                         className={dropdownItemClass}
                       >
                         <GitBranch className="w-4 h-4" />
-                        Conversation Tree
+                        {t('chat.header.conversationTree')}
                       </button>
                     )}
                     {onSummarize && (
@@ -491,7 +509,7 @@ export function ChatPageHeader({
                         className={`${dropdownItemClass} disabled:opacity-40`}
                       >
                         <FileText className="w-4 h-4" />
-                        {isSummarizing ? 'Summarizing...' : 'Summarize Context'}
+                        {isSummarizing ? t('chat.header.summarizing') : t('chat.header.summarizeContext')}
                       </button>
                     )}
                     <div className="border-t border-glass-border my-1" />
@@ -500,14 +518,14 @@ export function ChatPageHeader({
                       className={dropdownItemClass}
                     >
                       <Download className="w-4 h-4" />
-                      Export as Markdown
+                      {t('chat.header.exportMarkdown')}
                     </button>
                     <button
                       onClick={() => { setShowActionsMenu(false); handleExportText(); }}
                       className={dropdownItemClass}
                     >
                       <Download className="w-4 h-4" />
-                      Export as Text
+                      {t('chat.header.exportText')}
                     </button>
                     <div className="border-t border-glass-border my-1" />
                     <button
@@ -518,7 +536,7 @@ export function ChatPageHeader({
                       className="w-full px-3 py-2 text-left text-sm text-red-400 hover:text-red-300 hover:bg-red-500/5 flex items-center gap-2 transition-colors"
                     >
                       <Trash2 className="w-4 h-4" />
-                      Delete Chat
+                      {t('chat.header.deleteChat')}
                     </button>
                   </motion.div>
               )}
@@ -530,7 +548,7 @@ export function ChatPageHeader({
             variant="ghost"
             size="sm"
             onClick={() => setShowParamsPanel(true)}
-            title="Chat Parameters"
+            title={t('chat.header.chatParameters')}
             className={`hidden sm:flex p-1.5 ${activeChat.parameterOverrides ? 'text-parlor-400' : ''}`}
           >
             <Sliders className="w-4 h-4" />

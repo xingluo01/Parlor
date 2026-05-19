@@ -5,6 +5,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import hljs from 'highlight.js/lib/common';
 import 'highlight.js/styles/atom-one-dark.css';
+import { useTranslation } from 'react-i18next';
 import {
   RotateCcw,
   Trash2,
@@ -83,18 +84,24 @@ const sanitizeSchema = {
 
 // ── Substitute {{char}} / {{user}} template variables ──────────────────────────
 function substituteVars(text: string, charName: string, personaName: string): string {
+  if (typeof text !== 'string') return String(text ?? '');
   return text
     .replace(/\{\{char\}\}/gi, charName)
     .replace(/\{\{user\}\}/gi, personaName);
 }
 
-// ── Color "quoted dialogue" in burnished gold ─────────────────────────────────
+// ── Color quoted dialogue "…" (gold) & inner monologue (…) (gray italic) ──────
 function colorDialogue(text: string): ReactNode {
-  const parts = text.split(/("(?:[^"]*)")/g);
+  const parts = text.split(/("(?:[^"]*)"|\([^)]*\))/g);
   if (parts.length <= 1) return text;
   return parts.map((part, i) => {
+    // 对话 "xxx" → 金色，去掉引号
     if (part.length > 2 && part[0] === '"' && part[part.length - 1] === '"') {
-      return <span key={i} className="text-accent-400">{part}</span>;
+      return <span key={i} className="text-accent-400">{part.slice(1, -1)}</span>;
+    }
+    // 内心独白 (xxx) → 灰色斜体，去掉括号
+    if (part.length > 2 && part[0] === '(' && part[part.length - 1] === ')') {
+      return <span key={i} className="text-gray-400 italic">{part.slice(1, -1)}</span>;
     }
     return part ? <span key={i}>{part}</span> : null;
   });
@@ -102,24 +109,50 @@ function colorDialogue(text: string): ReactNode {
 
 // ── Code Block with syntax highlighting ──────────────────────────────────────
 function CodeBlock({ className, children }: { className?: string; children?: ReactNode }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const code = String(children ?? '').replace(/\n$/, '');
   const langMatch = className?.match(/language-(\w+)/);
   const lang = langMatch?.[1];
 
+  // JSON: auto-format minified JSON before highlighting
+  const displayCode = useMemo(() => {
+    // 确保 code 是字符串
+    if (typeof code !== 'string') return String(code);
+    // 不区分大小写匹配 json 标签
+    if (lang?.toLowerCase() === 'json') {
+      try {
+        return JSON.stringify(JSON.parse(code), null, 2);
+      } catch {
+        return code;
+      }
+    }
+    // 即使没有 json 标签，如果内容看起来像 JSON 也尝试格式化
+    const trimmed = code.trim();
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+        (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2);
+      } catch {
+        return code;
+      }
+    }
+    return code;
+  }, [code, lang]);
+
   const highlighted = useMemo(() => {
     try {
       if (lang && hljs.getLanguage(lang)) {
-        return hljs.highlight(code, { language: lang }).value;
+        return hljs.highlight(String(displayCode), { language: lang }).value;
       }
-      return hljs.highlightAuto(code).value;
+      return hljs.highlightAuto(String(displayCode)).value;
     } catch {
-      return code;
+      return String(displayCode);
     }
-  }, [code, lang]);
+  }, [displayCode, lang]);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(code);
+    navigator.clipboard.writeText(displayCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -127,13 +160,13 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
   return (
     <div className="relative my-2 rounded-lg overflow-hidden bg-dark-300/80 border border-glass-border text-sm">
       <div className="flex items-center justify-between px-3 py-1.5 bg-dark-300 border-b border-glass-border">
-        <span className="text-2xs text-gray-600 font-mono tracking-wide">{lang || 'code'}</span>
+        <span className="text-2xs text-gray-600 font-mono tracking-wide">{lang || t('chat.message.codeLabel')}</span>
         <button
           onClick={handleCopy}
           className="flex items-center gap-1 text-2xs text-gray-600 hover:text-gray-400 transition-colors"
         >
           {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-          {copied ? 'Copied' : 'Copy'}
+          {copied ? t('common.copied') : t('common.copy')}
         </button>
       </div>
       <pre className="overflow-x-auto p-3 !m-0 !bg-transparent">
@@ -171,7 +204,18 @@ const rpComponents = {
   code: ({ className, children }: { className?: string; children?: ReactNode }) => {
     const isBlock = /language-/.test(className || '');
     if (isBlock) {
-      return <CodeBlock className={className} children={children} />;
+      try {
+        return <CodeBlock className={className} children={children} />;
+      } catch (err) {
+        console.error('[CodeBlock] render error:', err);
+        // 降级：纯文本展示
+        const raw = typeof children === 'string' ? children : String(children ?? '');
+        return (
+          <pre className="overflow-x-auto p-3 my-2 rounded-lg bg-dark-300/80 border border-glass-border text-sm text-gray-300">
+            <code>{raw}</code>
+          </pre>
+        );
+      }
     }
     return <code className="bg-dark-300/60 text-parlor-300 px-1.5 py-0.5 rounded text-sm font-mono">{children}</code>;
   },
@@ -303,10 +347,12 @@ interface MessageBubbleProps {
 }
 
 function getSwipeContent(message: Message, swipeIndex: number): string {
+  const fallback = typeof message.content === 'string' ? message.content : '';
   if (!message.swipes || message.swipes.length === 0) {
-    return message.content;
+    return fallback;
   }
-  return message.swipes[swipeIndex] || message.content;
+  const swipe = message.swipes[swipeIndex];
+  return typeof swipe === 'string' ? swipe : fallback;
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -333,6 +379,7 @@ export const MessageBubble = memo(function MessageBubble({
   onRetry,
   ttsVoice,
 }: MessageBubbleProps) {
+  const { t } = useTranslation();
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -424,12 +471,12 @@ export const MessageBubble = memo(function MessageBubble({
       </button>
 
       {/* Message Content */}
-      <div className="flex-1 max-w-[80%] min-w-0 overflow-hidden">
+      <div className="flex-1 max-w-[80%] min-w-0">
         <div
           ref={bubbleRef}
           onClick={handleBubbleTap}
           className={`
-            relative group rounded-2xl px-3.5 py-2.5 sm:px-4 sm:py-3
+            relative group overflow-hidden rounded-2xl px-3.5 py-2.5 sm:px-4 sm:py-3
             ${isUser
               ? 'bg-parlor-600/12 border border-parlor-500/15'
               : 'bg-dark-100/70 border border-glass-border'}
@@ -448,10 +495,10 @@ export const MessageBubble = memo(function MessageBubble({
               />
               <div className="flex gap-2 justify-end">
                 <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
-                  Cancel
+                  {t('common.cancel')}
                 </Button>
                 <Button size="sm" onClick={handleSaveEdit}>
-                  Save
+                  {t('common.save')}
                 </Button>
               </div>
             </div>
@@ -468,7 +515,7 @@ export const MessageBubble = memo(function MessageBubble({
                     className="flex items-center gap-2 text-2xs text-parlor-400 hover:text-parlor-300 transition-colors mb-2"
                   >
                     <Brain className="w-3.5 h-3.5" />
-                    <span>{isRegenerating && streamingReasoning ? 'Reasoning...' : 'Reasoning'}</span>
+                    <span>{isRegenerating && streamingReasoning ? t('chat.reasoning') : t('chat.message.reasoning')}</span>
                     <ChevronUp className={`w-3 h-3 transition-transform ${expandedReasoning ? '' : 'rotate-180'}`} />
                   </button>
                   <AnimatePresence>
@@ -518,8 +565,10 @@ export const MessageBubble = memo(function MessageBubble({
                 </AnimatePresence>
               )}
               {message.isEdited && !isRegenerating && (
-                <span className="text-2xs text-gray-600 mt-1 block italic">(edited)</span>
+                <span className="text-2xs text-gray-600 mt-1 block italic">{t('chat.message.edited')}</span>
               )}
+
+
             </>
           )}
 
@@ -536,7 +585,7 @@ export const MessageBubble = memo(function MessageBubble({
               <button
                 onClick={(e) => { e.stopPropagation(); handleStartEdit(); }}
                 className={actionBtnClass}
-                title="Edit"
+                title={t('common.edit')}
               >
                 <Edit3 className="w-3.5 h-3.5 text-gray-500" />
               </button>
@@ -544,7 +593,7 @@ export const MessageBubble = memo(function MessageBubble({
                 <button
                   onClick={(e) => { e.stopPropagation(); onCopy(content); }}
                   className={actionBtnClass}
-                  title="Copy"
+                  title={t('common.copy')}
                 >
                   <Copy className="w-3.5 h-3.5 text-gray-500" />
                 </button>
@@ -556,7 +605,7 @@ export const MessageBubble = memo(function MessageBubble({
                     if (tts.isSpeaking()) { tts.stop(); } else { tts.speak(content, ttsVoice); }
                   }}
                   className={actionBtnClass}
-                  title={tts.isSpeaking() ? 'Stop speaking' : 'Read aloud'}
+                  title={tts.isSpeaking() ? t('chat.message.stopSpeaking') : t('chat.message.readAloud')}
                 >
                   {tts.isSpeaking()
                     ? <VolumeX className="w-3.5 h-3.5 text-parlor-400" />
@@ -570,7 +619,7 @@ export const MessageBubble = memo(function MessageBubble({
                 <button
                   onClick={(e) => { e.stopPropagation(); setShowMoreMenu(prev => !prev); }}
                   className={actionBtnClass}
-                  title="More actions"
+                  title={t('chat.message.moreActions')}
                 >
                   <MoreHorizontal className="w-3.5 h-3.5 text-gray-500" />
                 </button>
@@ -585,7 +634,7 @@ export const MessageBubble = memo(function MessageBubble({
                           className={moreMenuItemClass}
                         >
                           <RotateCcw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
-                          Regenerate
+                          {t('chat.regenerate')}
                         </button>
                       )}
                       {isUser && onRetry && (
@@ -595,7 +644,7 @@ export const MessageBubble = memo(function MessageBubble({
                           className={moreMenuItemClass}
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
-                          Retry
+                          {t('chat.message.retry')}
                         </button>
                       )}
                       <button
@@ -603,7 +652,7 @@ export const MessageBubble = memo(function MessageBubble({
                         className={moreMenuItemClass}
                       >
                         <Bookmark className={`w-3.5 h-3.5 ${message.bookmarked ? 'fill-accent-500 text-accent-500' : ''}`} />
-                        {message.bookmarked ? 'Remove Bookmark' : 'Bookmark'}
+                        {message.bookmarked ? t('chat.message.removeBookmark') : t('chat.message.bookmark')}
                       </button>
                       {onBranch && (
                         <button
@@ -611,7 +660,7 @@ export const MessageBubble = memo(function MessageBubble({
                           className={moreMenuItemClass}
                         >
                           <GitBranch className="w-3.5 h-3.5" />
-                          Branch from here
+                          {t('chat.message.branchFromHere')}
                         </button>
                       )}
                       {isUser && (
@@ -620,7 +669,7 @@ export const MessageBubble = memo(function MessageBubble({
                           className={moreMenuItemClass}
                         >
                           <Copy className="w-3.5 h-3.5" />
-                          Copy
+                          {t('common.copy')}
                         </button>
                       )}
                       <button
@@ -628,7 +677,7 @@ export const MessageBubble = memo(function MessageBubble({
                         className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:text-red-300 hover:bg-red-500/5 transition-colors"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
-                        Delete
+                        {t('common.delete')}
                       </button>
                     </div>
                   </>
@@ -643,10 +692,10 @@ export const MessageBubble = memo(function MessageBubble({
               className="flex items-center gap-1 pt-2 mt-2 border-t border-glass-border sm:hidden"
               onClick={(e) => e.stopPropagation()}
             >
-              <button onClick={() => handleStartEdit()} className="p-1.5 rounded-lg hover:bg-dark-300/50" title="Edit">
+              <button onClick={() => handleStartEdit()} className="p-1.5 rounded-lg hover:bg-dark-300/50" title={t('common.edit')}>
                 <Edit3 className="w-3.5 h-3.5 text-gray-500" />
               </button>
-              <button onClick={() => onCopy(content)} className="p-1.5 rounded-lg hover:bg-dark-300/50" title="Copy">
+              <button onClick={() => onCopy(content)} className="p-1.5 rounded-lg hover:bg-dark-300/50" title={t('common.copy')}>
                 <Copy className="w-3.5 h-3.5 text-gray-500" />
               </button>
               {!isUser && (
@@ -654,7 +703,7 @@ export const MessageBubble = memo(function MessageBubble({
                   onClick={() => onRegenerate(message.id)}
                   disabled={isGenerating}
                   className="p-1.5 rounded-lg hover:bg-dark-300/50 disabled:opacity-40"
-                  title="Regenerate"
+                  title={t('chat.regenerate')}
                 >
                   <RotateCcw className={`w-3.5 h-3.5 text-gray-500 ${isGenerating ? 'animate-spin' : ''}`} />
                 </button>
@@ -664,20 +713,20 @@ export const MessageBubble = memo(function MessageBubble({
                   onClick={() => onRetry(message.id)}
                   disabled={isGenerating}
                   className="p-1.5 rounded-lg hover:bg-dark-300/50 disabled:opacity-40"
-                  title="Retry"
+                  title={t('chat.message.retry')}
                 >
                   <RotateCcw className="w-3.5 h-3.5 text-gray-500" />
                 </button>
               )}
-              <button onClick={() => onBookmark(message.id)} className="p-1.5 rounded-lg hover:bg-dark-300/50" title={message.bookmarked ? 'Remove Bookmark' : 'Bookmark'}>
+              <button onClick={() => onBookmark(message.id)} className="p-1.5 rounded-lg hover:bg-dark-300/50" title={message.bookmarked ? t('chat.message.removeBookmark') : t('chat.message.bookmark')}>
                 <Bookmark className={`w-3.5 h-3.5 ${message.bookmarked ? 'fill-accent-500 text-accent-500' : 'text-gray-500'}`} />
               </button>
               {onBranch && (
-                <button onClick={() => onBranch(message.id)} className="p-1.5 rounded-lg hover:bg-dark-300/50" title="Branch from here">
+                <button onClick={() => onBranch(message.id)} className="p-1.5 rounded-lg hover:bg-dark-300/50" title={t('chat.message.branchFromHere')}>
                   <GitBranch className="w-3.5 h-3.5 text-gray-500" />
                 </button>
               )}
-              <button onClick={() => setShowDeleteConfirm(true)} className="p-1.5 rounded-lg hover:bg-dark-300/50" title="Delete">
+              <button onClick={() => setShowDeleteConfirm(true)} className="p-1.5 rounded-lg hover:bg-dark-300/50" title={t('common.delete')}>
                 <Trash2 className="w-3.5 h-3.5 text-red-400" />
               </button>
             </div>
@@ -707,7 +756,7 @@ export const MessageBubble = memo(function MessageBubble({
               }}
               disabled={isGenerating}
               className="p-1 rounded-md hover:bg-glass-white disabled:opacity-30 transition-colors"
-              title={swipeIndex >= totalSwipes - 1 ? 'Generate alternate response' : 'Next response'}
+              title={swipeIndex >= totalSwipes - 1 ? t('chat.message.generateAlternate') : t('chat.message.nextResponse')}
             >
               <ChevronRight className={`w-3.5 h-3.5 ${swipeIndex >= totalSwipes - 1 ? 'text-parlor-400' : 'text-gray-500'}`} />
             </button>
@@ -744,11 +793,11 @@ export const MessageBubble = memo(function MessageBubble({
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-[2px]" onClick={() => setShowDeleteConfirm(false)}>
           <div className="glass p-6 max-w-sm mx-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-medium text-white mb-2 font-serif">Delete Message</h3>
-            <p className="text-sm text-gray-500 mb-4">Are you sure? This cannot be undone.</p>
+            <h3 className="text-lg font-medium text-white mb-2 font-serif">{t('chat.deleteMessage')}</h3>
+            <p className="text-sm text-gray-500 mb-4">{t('chat.message.deleteConfirmMessage')}</p>
             <div className="flex gap-2 justify-end">
-              <Button variant="ghost" size="sm" onClick={() => setShowDeleteConfirm(false)}>Cancel</Button>
-              <Button variant="danger" size="sm" onClick={handleDelete}>Delete</Button>
+              <Button variant="ghost" size="sm" onClick={() => setShowDeleteConfirm(false)}>{t('common.cancel')}</Button>
+              <Button variant="danger" size="sm" onClick={handleDelete}>{t('common.delete')}</Button>
             </div>
           </div>
         </div>

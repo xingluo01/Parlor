@@ -1,0 +1,69 @@
+{
+  "id": "example-world-001",
+  "name": "剑与魔法世界",
+  "enabled": true,
+  "entries": [
+    {
+      "id": "entry-001",
+      "keywords": ["龙", "巨龙", "古龙"],
+      "content": "龙是这个世界最强大的生物，分为元素龙、古龙和虚空龙三大类。元素龙掌控自然力量，古龙拥有超越常理的智慧，虚空龙来自世界之外的深渊。",
+      "enabled": true,
+      "insertionOrder": 0,
+      "caseSensitive": false,
+      "matchWholeWords": false
+    },
+    {
+      "id": "entry-002",
+      "keywords": ["魔法", "魔力", "法术"],
+      "content": "魔法是这个世界的基础力量，来源于世界核心的魔力脉流。法师通过精神共鸣引导魔力，可分为元素魔法、神圣魔法和禁忌魔法三大体系。",
+      "enabled": true,
+      "insertionOrder": 1,
+      "caseSensitive": false,
+      "matchWholeWords": false
+    },
+    {
+      "id": "entry-003",
+      "keywords": ["精灵", "精灵族", "艾尔达"],
+      "content": "精灵是古老的优雅种族，居住在森罗万象的精灵之森。他们拥有千年寿命，精通自然魔法和弓箭技艺。精灵族分为日精灵、月精灵和暗精灵三支。",
+      "enabled": true,
+      "insertionOrder": 2
+    },
+    {
+      "id": "entry-004",
+      "keywords": ["王国", "王都", "狮鹫王国"],
+      "content": "狮鹫王国是人类最大的国度，以狮鹫骑士团闻名于世。王都银翼城坐落在翡翠平原上，是大陆的贸易与政治中心。",
+      "enabled": true,
+      "insertionOrder": 3
+    },
+    {
+      "id": "entry-005",
+      "keywords": ["冒险者公会", "公会", "冒险者"],
+      "content": "冒险者公会是遍布大陆的组织，负责发布委托、管理冒险者等级。从 E 级到 S 级共七个等级，S 级冒险者被视为传说中的英雄。",
+      "enabled": true,
+      "insertionOrder": 4
+    },
+    {
+      "id": "entry-006",
+      "keywords": ["地下城", "迷宫", "遗迹"],
+      "content": "远古文明留下的地下城遍布大陆各地，其中埋藏着珍贵的魔法造物和失落的知识。地下城分为普通、困难、噩梦、深渊四个难度等级，越深层越危险，但奖励也越丰厚。",
+      "enabled": true,
+      "insertionOrder": 5
+    },
+    {
+      "id": "entry-007",
+      "keywords": ["兽人", "兽人族"],
+      "content": "兽人居住在大陆北部的荒原和山脉中，以部落为单位生活。他们拥有强壮的体魄和优秀的战斗天赋，但近年来与人类王国签订了和平协议，部分兽人开始在人类城市中生活和工作。",
+      "enabled": true,
+      "insertionOrder": 6
+    },
+    {
+      "id": "entry-008",
+      "keywords": ["神器", "传说武器", "圣物"],
+      "content": "传说中，世界初开时有十二件神器被创造出来，每一件都蕴含着足以改变世界的力量。这些神器散落在大陆各处，寻找着命中注定的持有者。据说集齐十二件神器可以开启通往世界核心的大门。",
+      "enabled": true,
+      "insertionOrder": 7
+    }
+  ],
+  "createdAt": 1700000000000,
+  "updatedAt": 1700000000000
+}

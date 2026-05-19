@@ -1,3 +1,5 @@
+import i18n from '../i18n';
+
 export type SlashCommand = {
   name: string;
   description: string;
@@ -24,15 +26,15 @@ function register(cmd: SlashCommand) {
 
 register({
   name: 'continue',
-  description: 'Continue the last response',
-  usage: '/continue',
+  description: i18n.t('commands.continue.description'),
+  usage: i18n.t('commands.continue.usage'),
   execute: (_args, ctx) => ctx.onContinue(),
 });
 
 register({
   name: 'regenerate',
-  description: 'Regenerate the last response',
-  usage: '/regenerate',
+  description: i18n.t('commands.regenerate.description'),
+  usage: i18n.t('commands.regenerate.usage'),
   execute: (_args, ctx) => {
     if (ctx.lastAssistantMessageId) ctx.onRegenerate(ctx.lastAssistantMessageId);
   },
@@ -40,8 +42,8 @@ register({
 
 register({
   name: 'regen',
-  description: 'Regenerate the last response (alias)',
-  usage: '/regen',
+  description: i18n.t('commands.regenerateAlias.description'),
+  usage: i18n.t('commands.regenerateAlias.usage'),
   execute: (_args, ctx) => {
     if (ctx.lastAssistantMessageId) ctx.onRegenerate(ctx.lastAssistantMessageId);
   },
@@ -49,22 +51,22 @@ register({
 
 register({
   name: 'impersonate',
-  description: 'Generate a message as the user',
-  usage: '/impersonate',
+  description: i18n.t('commands.impersonate.description'),
+  usage: i18n.t('commands.impersonate.usage'),
   execute: (_args, ctx) => ctx.onImpersonate(),
 });
 
 register({
   name: 'summarize',
-  description: 'Summarize the conversation',
-  usage: '/summarize',
+  description: i18n.t('commands.summarize.description'),
+  usage: i18n.t('commands.summarize.usage'),
   execute: (_args, ctx) => ctx.onSummarize(),
 });
 
 register({
   name: 'sys',
-  description: 'Send a system message',
-  usage: '/sys <message>',
+  description: i18n.t('commands.system.description'),
+  usage: i18n.t('commands.system.usage'),
   execute: (args, ctx) => {
     if (args.trim()) ctx.onSendSystemMessage(args.trim());
   },
@@ -72,8 +74,8 @@ register({
 
 register({
   name: 'note',
-  description: "Set the author's note",
-  usage: '/note <text>',
+  description: i18n.t('commands.setNote.description'),
+  usage: i18n.t('commands.setNote.usage'),
   execute: (args, ctx) => ctx.onSetAuthorNote(args.trim()),
 });
 

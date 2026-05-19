@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import Cropper from 'react-easy-crop';
 import type { Area } from 'react-easy-crop';
 import { Modal } from './Modal';
@@ -55,6 +56,7 @@ async function cropToDataUrl(
 }
 
 export function ImageCropModal({ imageSrc, onConfirm, onCancel }: ImageCropModalProps) {
+  const { t } = useTranslation();
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
@@ -71,7 +73,7 @@ export function ImageCropModal({ imageSrc, onConfirm, onCancel }: ImageCropModal
   };
 
   return (
-    <Modal isOpen onClose={onCancel} title="Adjust Image" size="md">
+    <Modal isOpen onClose={onCancel} title={t('ui.imageCrop.adjustImage')} size="md">
       <div className="space-y-4">
         {/* Crop area */}
         <div className="relative h-72 rounded-lg overflow-hidden bg-dark-300">
@@ -92,7 +94,7 @@ export function ImageCropModal({ imageSrc, onConfirm, onCancel }: ImageCropModal
         {/* Zoom control */}
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label className="text-sm text-gray-400">Zoom</label>
+            <label className="text-sm text-gray-400">{t('ui.imageCrop.zoom')}</label>
             <span className="text-xs text-gray-500">{zoom.toFixed(2)}×</span>
           </div>
           <input
@@ -109,7 +111,7 @@ export function ImageCropModal({ imageSrc, onConfirm, onCancel }: ImageCropModal
         {/* Rotation control */}
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label className="text-sm text-gray-400">Rotation</label>
+            <label className="text-sm text-gray-400">{t('ui.imageCrop.rotation')}</label>
             <span className="text-xs text-gray-500">{rotation}°</span>
           </div>
           <input
@@ -126,10 +128,10 @@ export function ImageCropModal({ imageSrc, onConfirm, onCancel }: ImageCropModal
         {/* Footer */}
         <div className="flex gap-3 justify-end pt-1">
           <Button variant="ghost" onClick={onCancel}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button onClick={handleApply}>
-            Apply
+            {t('common.apply')}
           </Button>
         </div>
       </div>

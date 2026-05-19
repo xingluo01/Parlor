@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { generateUUID } from '../../utils/uuid';
 import {
   Upload,
@@ -24,6 +25,7 @@ export function RegexSettings({
   regexes: RegexScript[];
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRegex, setEditingRegex] = useState<RegexScript | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -66,7 +68,7 @@ export function RegexSettings({
         imported++;
       }
       onRefresh();
-      setImportSuccess(`Imported ${imported} rule${imported !== 1 ? 's' : ''}`);
+      setImportSuccess(t('settings.regex.importedCount', { count: imported }));
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Failed to import');
     } finally {
@@ -89,7 +91,7 @@ export function RegexSettings({
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-white font-serif tracking-tight">Text Processing Rules</h2>
+        <h2 className="text-lg font-semibold text-white font-serif tracking-tight">{t('settings.regex.title')}</h2>
         <div className="flex gap-2">
           <input
             ref={importInputRef}
@@ -104,7 +106,7 @@ export function RegexSettings({
             onClick={() => importInputRef.current?.click()}
           >
             <Upload className="w-4 h-4" />
-            Import
+            {t('common.import')}
           </Button>
           <Button
             size="sm"
@@ -114,7 +116,7 @@ export function RegexSettings({
             }}
           >
             <Plus className="w-4 h-4" />
-            Add Rule
+            {t('settings.regex.addRule')}
           </Button>
         </div>
       </div>
@@ -133,12 +135,12 @@ export function RegexSettings({
       )}
 
       <p className="text-gray-500 text-sm mb-4">
-        Regex rules run in order and can transform text before it's sent to the AI (input) or after a response is received (output).
+        {t('settings.regex.description')}
       </p>
 
       {sorted.length === 0 ? (
         <div className="text-center py-8">
-          <p className="text-gray-500">No regex rules configured yet. Use "Add Rule" or import a JSON file.</p>
+          <p className="text-gray-500">{t('settings.regex.noRulesDesc')}</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -155,7 +157,7 @@ export function RegexSettings({
                       onRefresh();
                     }}
                     className="flex-shrink-0 text-gray-400 hover:text-white transition-colors"
-                    title={script.enabled ? 'Disable' : 'Enable'}
+                    title={script.enabled ? t('settings.regex.disableScript') : t('settings.regex.enableScript')}
                   >
                     {script.enabled
                       ? <ToggleRight className="w-5 h-5 text-parlor-400" />
@@ -216,7 +218,7 @@ export function RegexSettings({
                     ? 'bg-green-500/20 text-green-300'
                     : 'bg-purple-500/20 text-purple-300'
                 }`}>
-                  {script.applyTo === 'input' ? 'Input' : script.applyTo === 'output' ? 'Output' : 'Both'}
+                  {script.applyTo === 'input' ? t('settings.regex.inputScope') : script.applyTo === 'output' ? t('settings.regex.outputScope') : t('settings.regex.bothScope')}
                 </span>
               </div>
             </div>
@@ -255,9 +257,9 @@ export function RegexSettings({
             setDeleteConfirm(null);
           }
         }}
-        title="Delete Rule"
-        message="Are you sure you want to delete this regex rule?"
-        confirmText="Delete"
+        title={t('settings.regex.deleteRule')}
+        message={t('settings.regex.deleteRuleConfirm')}
+        confirmText={t('common.delete')}
         variant="danger"
       />
     </div>
@@ -278,6 +280,7 @@ export function RegexModal({
   regexCount: number;
   onSave: (data: Partial<RegexScript>) => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [findRegex, setFindRegex] = useState('');
   const [replaceString, setReplaceString] = useState('');
@@ -359,25 +362,25 @@ export function RegexModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={regex ? 'Edit Rule' : 'New Rule'}
+      title={regex ? t('settings.regex.editRule') : t('settings.regex.newRule')}
       size="md"
     >
       <div className="space-y-4">
         <Input
-          label="Rule Name"
+          label={t('settings.regex.ruleName')}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Remove asterisks"
+          placeholder={t('settings.regex.ruleNamePlaceholder')}
         />
 
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1.5">
-            Find Regex
+            {t('settings.regex.findRegex')}
           </label>
           <input
             value={findRegex}
             onChange={(e) => setFindRegex(e.target.value)}
-            placeholder="e.g. \*\*(.*?)\*\*"
+            placeholder={t('settings.regex.findRegexPlaceholder')}
             className={`w-full px-4 py-2.5 rounded-lg bg-dark-100 border text-white font-mono placeholder-gray-500 focus:outline-none ${
               regexError
                 ? 'border-red-500 focus:border-red-500'
@@ -394,10 +397,10 @@ export function RegexModal({
 
         <div>
           <Input
-            label="Replace With"
+            label={t('settings.regex.replaceWith')}
             value={replaceString}
             onChange={(e) => setReplaceString(e.target.value)}
-            placeholder="e.g. $1"
+            placeholder={t('settings.regex.replaceWithPlaceholder')}
           />
           <p className="mt-1 text-xs text-gray-500">
             Use <code className="text-gray-400">$1</code>, <code className="text-gray-400">$2</code> for capture groups. Leave empty to delete matches.
@@ -405,7 +408,7 @@ export function RegexModal({
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">Flags</label>
+          <label className="block text-sm font-medium text-gray-300 mb-2">{t('settings.regex.flags')}</label>
           <div className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
@@ -438,36 +441,36 @@ export function RegexModal({
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">Apply To</label>
+          <label className="block text-sm font-medium text-gray-300 mb-2">{t('settings.regex.applyTo')}</label>
           <div className="flex gap-2">
             {(['input', 'output', 'both'] as const).map((option) => (
               <button
                 key={option}
                 onClick={() => setApplyTo(option)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium capitalize transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   applyTo === option
                     ? 'bg-parlor-500/12 border border-parlor-500/15 text-white'
                     : 'bg-dark-100 text-gray-400 hover:text-white border border-glass-border'
                 }`}
               >
-                {option}
+                {option === 'input' ? t('settings.regex.inputScope') : option === 'output' ? t('settings.regex.outputScope') : t('settings.regex.bothScope')}
               </button>
             ))}
           </div>
         </div>
 
         <div className="border-t border-glass-border pt-4">
-          <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Live Test</p>
+          <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">{t('settings.regex.liveTest')}</p>
           <Textarea
-            label="Sample Text"
+            label={t('settings.regex.sampleText')}
             value={sampleText}
             onChange={(e) => setSampleText(e.target.value)}
-            placeholder="Paste sample text here…"
+            placeholder={t('settings.regex.sampleTextPlaceholder')}
             rows={3}
           />
           {sampleText && (
             <div className="mt-3">
-              <label className="block text-sm font-medium text-gray-300 mb-1.5">Result</label>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">{t('settings.regex.result')}</label>
               <textarea
                 readOnly
                 value={previewResult}
@@ -479,10 +482,10 @@ export function RegexModal({
         </div>
 
         <div className="flex justify-end gap-3 pt-2">
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="ghost" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={handleSave} disabled={!canSave}>
             <Save className="w-4 h-4" />
-            Save
+            {t('common.save')}
           </Button>
         </div>
       </div>

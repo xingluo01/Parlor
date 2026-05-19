@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { GripVertical, RotateCcw } from 'lucide-react';
 import type { PromptEntry, PromptOrderEntry } from '../../types';
 
@@ -51,6 +52,7 @@ export function PromptOrderEditor({
   onPromptsChange,
   onOrderChange,
 }: PromptOrderEditorProps) {
+  const { t } = useTranslation();
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const dragCounter = useRef(0);
@@ -158,9 +160,9 @@ export function PromptOrderEditor({
   if (prompts.length === 0) {
     return (
       <div className="text-center py-8 text-gray-500">
-        <p>No prompts in this preset.</p>
+        <p>{t('settings.presets.noPrompts')}</p>
         <p className="text-sm mt-1">
-          Import a SillyTavern preset to add prompts.
+          {t('settings.presets.importPromptHint')}
         </p>
       </div>
     );
@@ -171,14 +173,14 @@ export function PromptOrderEditor({
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <p className="text-sm text-gray-500">
-          Drag to reorder prompts. Toggle to enable or disable.
+          {t('settings.presets.promptOrderHint')}
         </p>
         <button
           onClick={handleReset}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white bg-dark-100 border border-glass-border hover:border-parlor-500/40 transition-colors"
         >
           <RotateCcw className="w-3.5 h-3.5" />
-          Reset to Default
+          {t('settings.presets.resetToDefault')}
         </button>
       </div>
 
@@ -229,14 +231,14 @@ export function PromptOrderEditor({
                   {prompt.injection_position === 1 &&
                     prompt.injection_depth !== undefined && (
                       <span className="text-[10px] font-medium text-accent-500 bg-accent-500/15 px-1.5 py-0.5 rounded leading-none flex-shrink-0">
-                        @ depth {prompt.injection_depth}
+                        {t('settings.presets.atDepth', { depth: prompt.injection_depth })}
                       </span>
                     )}
 
                   {/* Marker badge */}
                   {prompt.marker && (
                     <span className="text-[10px] font-medium text-yellow-400 bg-yellow-500/15 px-1.5 py-0.5 rounded leading-none flex-shrink-0">
-                      marker
+                      {t('settings.presets.marker')}
                     </span>
                   )}
                 </div>

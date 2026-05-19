@@ -1,14 +1,23 @@
-import { useEffect, useState, useRef, useMemo } from 'react';
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { generateUUID } from '../utils/uuid';
 import { motion } from 'framer-motion';
-import { Plus, Edit, Trash2, Star, Upload, X, User, LayoutGrid, List } from 'lucide-react';
-import { Button, Avatar, Modal, Input, Textarea, ImageCropModal } from '../components/ui';
+import { Plus, Edit, Trash2, Star, Upload, X, User, Sparkles, CheckSquare, Square } from 'lucide-react';
+import { Button, Avatar, Modal, Input, Textarea, ImageCropModal, ConfirmDialog } from '../components/ui';
+import { useSelectMode } from '../hooks/useSelectMode';
 import { usePersonaStore } from '../stores';
-import { personaOps } from '../db';
-import type { Persona } from '../types';
+import { connectionOps, personaOps, worldInfoOps, characterOps } from '../db';
+import type { Persona, WorldInfo } from '../types';
+import { callAI } from '../services/ai';
+import { extractJSON, buildCreatePersonaPrompt, CARD_HEIGHT_MAP } from '../utils/prompts';
+import { settingsOps } from '../db';
 
 export function PersonasPage() {
-  const { personas, setPersonas, activePersona, setActivePersona } = usePersonaStore();
+  const { t } = useTranslation();
+  const personas = usePersonaStore(s => s.personas);
+  const setPersonas = usePersonaStore(s => s.setPersonas);
+  const activePersona = usePersonaStore(s => s.activePersona);
+  const setActivePersona = usePersonaStore(s => s.setActivePersona);
   const [isLoading, setIsLoading] = useState(true);
   
   // Sort personas alphabetically by name
@@ -18,21 +27,31 @@ export function PersonasPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPersona, setEditingPersona] = useState<Persona | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const [viewMode, setViewModeRaw] = useState<'grid' | 'list'>(
-    () => (localStorage.getItem('parlor-personas-view') as 'grid' | 'list') || 'grid'
-  );
-  const setViewMode = (mode: 'grid' | 'list') => {
-    setViewModeRaw(mode);
-    localStorage.setItem('parlor-personas-view', mode);
-  };
+  const viewMode = 'grid';
+  const [cardSize, setCardSize] = useState<'small' | 'medium' | 'large'>('medium');
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showAIPersona, setShowAIPersona] = useState(false);
+  const [aiPersonaPrompt, setAiPersonaPrompt] = useState('');
+  const [aiPersonaGenerating, setAiPersonaGenerating] = useState(false);
+  const [worldInfoBooks, setWorldInfoBooks] = useState<WorldInfo[]>([]);
+  const [selectedBookId, setSelectedBookId] = useState('');
+  const [selectedGroupId, setSelectedGroupId] = useState('');
+  const [selectedCharId, setSelectedCharId] = useState('');
+  const [allCharacters, setAllCharacters] = useState<any[]>([]);
+  const { selectMode, selectedIds, toggleSelectMode, handleToggleSelect, handleSelectAll, clearSelection } = useSelectMode<Persona>();
+  const [deleteSelectedConfirm, setDeleteSelectedConfirm] = useState(false);
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
 
   useEffect(() => {
     async function loadPersonas() {
       try {
-        const personaList = await personaOps.getAll();
+        const [personaList, appSettings] = await Promise.all([
+          personaOps.getAll(),
+          settingsOps.get(),
+        ]);
+        if (appSettings?.cardSize) setCardSize(appSettings.cardSize);
         setPersonas(personaList);
         const defaultPersona = personaList.find((p) => p.isDefault);
         if (defaultPersona) {
@@ -45,6 +64,8 @@ export function PersonasPage() {
       }
     }
     loadPersonas();
+    worldInfoOps.getAll().then(books => setWorldInfoBooks(books)).catch(() => {});
+    characterOps.getAllCompact().then(chars => setAllCharacters(chars)).catch(() => {});
   }, [setPersonas, setActivePersona]);
 
   const handleSetDefault = async (id: string) => {
@@ -98,7 +119,7 @@ export function PersonasPage() {
     } else {
       const newPersona: Persona = {
         id: generateUUID(),
-        name: data.name || 'New Persona',
+        name: data.name || t('personas.newPersona'),
         description: data.description || '',
         personality: data.personality,
         avatar: data.avatar,
@@ -126,7 +147,7 @@ export function PersonasPage() {
 
       // Validate structure
       if (!data.personas || typeof data.personas !== 'object') {
-        throw new Error('Invalid file format: missing "personas" object');
+        throw new Error(t('personas.invalidFormat'));
       }
 
       const personaNames = data.personas as Record<string, string>;
@@ -142,7 +163,7 @@ export function PersonasPage() {
 
         const persona: Persona = {
           id: generateUUID(),
-          name: name || 'Imported Persona',
+          name: name || t('personas.newPersona'),
           description: description.replace(/\{\{user\}\}/g, '{{user}}'),
           avatar: undefined, // Images would need to be imported separately
           isDefault: fileId === defaultPersonaId,
@@ -197,15 +218,158 @@ export function PersonasPage() {
     }
   };
 
+  // 从角色中提取分组（按 worldInfoId 归类）
+  const characterGroups = useMemo(() => {
+    const groupMap = new Map<string, { count: number }>();
+    for (const c of allCharacters) {
+      if (c.worldInfoId) {
+        const existing = groupMap.get(c.worldInfoId);
+        if (existing) existing.count++;
+        else groupMap.set(c.worldInfoId, { count: 1 });
+      }
+    }
+    return groupMap;
+  }, [allCharacters]);
+
+  // ─── AI 创建人设 ──────────────────────────────────────────────────────────────
+
+  async function handleAICreatePersona() {
+    if (!aiPersonaPrompt.trim()) return;
+    setAiPersonaGenerating(true);
+    try {
+      const connection = await connectionOps.getActive();
+      if (!connection) { alert('请先配置 AI 连接'); return; }
+
+      // 获取选中的世界书信息
+      let worldContext = '';
+      if (selectedBookId) {
+        const book = worldInfoBooks.find(b => b.id === selectedBookId);
+        if (book) {
+          worldContext = `参考世界观「${book.name}」的设定：\n${book.entries.slice(0, 10).map(e => `- ${e.keywords.join(', ')}: ${e.content.slice(0, 100)}`).join('\n')}`;
+        }
+      }
+
+      // 角色组参考
+      let groupContext = '';
+      if (selectedGroupId) {
+        const group = worldInfoBooks.find(b => b.id === selectedGroupId);
+        if (group) {
+          groupContext = `参考角色组「${group.name}」的设定：\n${group.entries.slice(0, 10).map(e => `- ${e.keywords.join(', ')}: ${e.content.slice(0, 150)}`).join('\n')}`;
+        }
+      }
+
+      // 角色参考
+      let charRefContext = '';
+      if (selectedCharId) {
+        const ch = allCharacters.find((c: any) => c.id === selectedCharId);
+        if (ch) {
+          charRefContext = `参考角色「${ch.name}」的信息：\n描述：${(ch.description || '').slice(0, 200)}\n性格：${(ch.personality || '').slice(0, 100)}`;
+        }
+      }
+
+      const prompt = buildCreatePersonaPrompt(worldContext, groupContext, aiPersonaPrompt, charRefContext);
+
+      const resultText = await callAI(connection, '你是一个人设创作专家。', prompt, { temperature: 0.5, maxTokens: 2048 });
+
+      // 解析 JSON
+      const result = extractJSON(resultText);
+      if (!result.name) throw new Error('AI 未生成人设名称');
+
+      // 保存人设
+      const persona: Persona = {
+        id: generateUUID(),
+        name: result.name,
+        description: result.description || '',
+        personality: result.personality || '',
+        isDefault: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      await personaOps.add(persona);
+      setPersonas([...personas, persona]);
+      setShowAIPersona(false);
+      setAiPersonaPrompt('');
+    } catch (e: any) {
+      alert(`创建失败: ${e.message}`);
+    } finally {
+      setAiPersonaGenerating(false);
+    }
+  }
+
+  const handleDeleteSelected = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    setIsBatchDeleting(true);
+    try {
+      await Promise.all([...selectedIds].map(id => personaOps.delete(id)));
+      setPersonas(personas.filter(p => !selectedIds.has(p.id)));
+      clearSelection();
+    } catch (err) {
+      console.error('Batch delete failed:', err);
+    } finally {
+      setIsBatchDeleting(false);
+      setDeleteSelectedConfirm(false);
+    }
+  }, [selectedIds, personas, setPersonas, clearSelection]);
+
   return (
     <div className="p-4 md:p-6">
-      {/* Header */}
+      {/* Header + Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-white font-serif tracking-tight">Personas</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-white font-serif tracking-tight">{t('personas.title')}</h1>
           <p className="text-gray-600 text-sm mt-1">
-            Your user profiles for roleplay - the AI will know you as this character
+            {t('personas.subtitle')}
           </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {selectMode ? (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => handleSelectAll(sortedPersonas)} disabled={selectedIds.size === sortedPersonas.length}>
+                <CheckSquare className="w-4 h-4" />
+                <span className="hidden sm:inline">{t('characters.selectAll')}</span>
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => setDeleteSelectedConfirm(true)}
+                disabled={selectedIds.size === 0 || isBatchDeleting}
+                isLoading={isBatchDeleting}
+              >
+                <Trash2 className="w-4 h-4" />
+                {selectedIds.size > 0 ? `(${selectedIds.size})` : ''}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={toggleSelectMode}>
+                <X className="w-4 h-4" />
+                <span className="hidden sm:inline">{t('common.cancel')}</span>
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" onClick={toggleSelectMode} title={t('characters.select')}>
+                <CheckSquare className="w-4 h-4" />
+                <span className="hidden sm:inline">{t('characters.select')}</span>
+              </Button>
+              <Button variant="secondary" size="sm" onClick={handleCreate}>
+                <Plus className="w-4 h-4" />
+                {t('personas.newPersona')}
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setShowAIPersona(true)}>
+                <Sparkles className="w-4 h-4" />
+                AI 创建
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()}>
+                <Upload className="w-4 h-4" />
+                {t('personas.import')}
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json"
+                onChange={handleImport}
+                className="hidden"
+              />
+            </>
+          )}
         </div>
       </div>
 
@@ -221,47 +385,12 @@ export function PersonasPage() {
       
       {importSuccess !== null && (
         <div className="mb-4 p-4 rounded-lg bg-green-500/10 border border-green-500/30 text-green-400 flex items-center justify-between">
-          <span>Successfully imported {importSuccess} persona{importSuccess !== 1 ? 's' : ''}!</span>
+          <span>{t('personas.importSuccess', { count: importSuccess })}</span>
           <button onClick={() => setImportSuccess(null)} className="hover:text-green-300">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
-
-      {/* Action Buttons */}
-      <div className="flex flex-wrap items-center gap-2 mb-6">
-        <Button onClick={handleCreate}>
-          <Plus className="w-4 h-4" />
-          New Persona
-        </Button>
-        <Button variant="secondary" onClick={() => fileInputRef.current?.click()}>
-          <Upload className="w-4 h-4" />
-          Import
-        </Button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".json"
-          onChange={handleImport}
-          className="hidden"
-        />
-        <div className="ml-auto flex gap-1">
-          <button
-            onClick={() => setViewMode('grid')}
-            className={`p-2 rounded-lg transition-colors ${viewMode === 'grid' ? 'bg-parlor-500/20 text-parlor-400' : 'text-gray-500 hover:text-gray-300'}`}
-            title="Grid view"
-          >
-            <LayoutGrid className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setViewMode('list')}
-            className={`p-2 rounded-lg transition-colors ${viewMode === 'list' ? 'bg-parlor-500/20 text-parlor-400' : 'text-gray-500 hover:text-gray-300'}`}
-            title="List view"
-          >
-            <List className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
 
       {/* Personas List */}
       {isLoading ? (
@@ -273,13 +402,13 @@ export function PersonasPage() {
           <div className="w-16 h-16 rounded-full bg-dark-200 flex items-center justify-center mb-4">
             <User className="w-8 h-8 text-gray-600" />
           </div>
-          <p className="text-gray-400 mb-2 font-serif">No personas yet</p>
+          <p className="text-gray-400 mb-2 font-serif">{t('personas.noPersonas')}</p>
           <p className="text-gray-600 text-sm mb-4">
-            Create a persona to tell the AI who you are in roleplays
+            {t('personas.emptyHint')}
           </p>
           <Button onClick={handleCreate}>
             <Plus className="w-4 h-4" />
-            Create Your First Persona
+            {t('personas.createFirst')}
           </Button>
         </div>
       ) : (
@@ -297,9 +426,20 @@ export function PersonasPage() {
                 key={persona.id}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className={`glass p-3 sm:p-4 ${persona.isDefault ? 'border-parlor-500/30' : ''}`}
+                className={`glass p-3 sm:p-4 cursor-pointer transition-all ${CARD_HEIGHT_MAP[cardSize || 'medium']} overflow-hidden ${
+                  persona.isDefault ? 'border-parlor-500/30' : ''
+                } ${selectedIds.has(persona.id) ? 'ring-1 ring-parlor-500/60' : ''}`}
+                onClick={selectMode ? () => handleToggleSelect(persona.id) : undefined}
               >
                 <div className="flex items-start gap-3 sm:gap-4">
+                  {selectMode && (
+                    <div className="flex-shrink-0 mt-1">
+                      {selectedIds.has(persona.id)
+                        ? <CheckSquare className="w-5 h-5 text-parlor-400" />
+                        : <Square className="w-5 h-5 text-gray-600" />
+                      }
+                    </div>
+                  )}
                   <Avatar
                     src={persona.avatar}
                     name={persona.name}
@@ -318,101 +458,117 @@ export function PersonasPage() {
                       {persona.isDefault && (
                         <span className="text-xs bg-parlor-500/20 text-parlor-400 px-2 py-0.5 rounded-full flex items-center gap-1">
                           <Star className="w-3 h-3" />
-                          Default
+                          {t('personas.default')}
                         </span>
                       )}
                     </div>
                     <p className="text-sm text-gray-500 line-clamp-2 mt-1">
-                      {persona.description || 'No description'}
+                      {persona.description || t('personas.noDescription')}
                     </p>
                   </div>
                 </div>
 
-                <div className="flex gap-2 mt-3 sm:mt-4">
-                  {!persona.isDefault && (
+                {!selectMode && (
+                  <div className="flex gap-2 mt-3 sm:mt-4">
+                    {!persona.isDefault && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleSetDefault(persona.id)}
+                      >
+                        <Star className="w-4 h-4" />
+                        <span className="hidden sm:inline">{t('personas.setDefaultStandalone')}</span>
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleSetDefault(persona.id)}
+                      onClick={() => handleEdit(persona)}
                     >
-                      <Star className="w-4 h-4" />
-                      <span className="hidden sm:inline">Set Default</span>
+                      <Edit className="w-4 h-4" />
+                      {t('personas.edit')}
                     </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleEdit(persona)}
-                  >
-                    <Edit className="w-4 h-4" />
-                    Edit
-                  </Button>
-                  {!persona.isDefault && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setDeleteConfirm(persona.id)}
-                      className="text-red-400 hover:text-red-300"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  )}
-                </div>
+                    {!persona.isDefault && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setDeleteConfirm(persona.id)}
+                        className="text-red-400 hover:text-red-300"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    )}
+                  </div>
+                )}
               </motion.div>
             ) : (
               <motion.div
                 key={persona.id}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className={`glass-sm p-3 flex items-center gap-3 ${persona.isDefault ? 'border-parlor-500/30' : ''}`}
+                className={`glass-sm p-3 flex items-center gap-3 cursor-pointer transition-all ${
+                  persona.isDefault ? 'border-parlor-500/30' : ''
+                } ${selectedIds.has(persona.id) ? 'ring-1 ring-parlor-500/60' : ''}`}
+                onClick={selectMode ? () => handleToggleSelect(persona.id) : undefined}
               >
-                <Avatar
-                  src={persona.avatar}
-                  name={persona.name}
-                  size="md"
-                  className="flex-shrink-0"
-                />
+                {selectMode ? (
+                  <div className="flex-shrink-0">
+                    {selectedIds.has(persona.id)
+                      ? <CheckSquare className="w-5 h-5 text-parlor-400" />
+                      : <Square className="w-5 h-5 text-gray-600" />
+                    }
+                  </div>
+                ) : (
+                  <Avatar
+                    src={persona.avatar}
+                    name={persona.name}
+                    size="md"
+                    className="flex-shrink-0"
+                  />
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <h3 className="font-medium text-white truncate text-sm">{persona.name}</h3>
                     {persona.isDefault && (
                       <span className="text-xs bg-parlor-500/20 text-parlor-400 px-1.5 py-0.5 rounded-full flex items-center gap-1 flex-shrink-0">
                         <Star className="w-3 h-3" />
-                        Default
+                        {t('personas.default')}
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-gray-500 truncate mt-0.5">
-                    {persona.description || 'No description'}
-                  </p>
+                    <p className="text-xs text-gray-500 truncate mt-0.5">
+                      {persona.description || t('personas.noDescription')}
+                    </p>
                 </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  {!persona.isDefault && (
+                {!selectMode && (
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {!persona.isDefault && (
+                      <button
+                        onClick={() => handleSetDefault(persona.id)}
+                        className="p-1.5 rounded-lg text-gray-500 hover:text-parlor-400 hover:bg-glass-white transition-colors"
+                        title={t('personas.setDefault')}
+                      >
+                        <Star className="w-4 h-4" />
+                      </button>
+                    )}
                     <button
-                      onClick={() => handleSetDefault(persona.id)}
-                      className="p-1.5 rounded-lg text-gray-500 hover:text-parlor-400 hover:bg-glass-white transition-colors"
-                      title="Set Default"
+                      onClick={() => handleEdit(persona)}
+                      className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-glass-white transition-colors"
+                      title={t('personas.edit')}
                     >
-                      <Star className="w-4 h-4" />
+                      <Edit className="w-4 h-4" />
                     </button>
-                  )}
-                  <button
-                    onClick={() => handleEdit(persona)}
-                    className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-glass-white transition-colors"
-                    title="Edit"
-                  >
-                    <Edit className="w-4 h-4" />
-                  </button>
-                  {!persona.isDefault && (
-                    <button
-                      onClick={() => setDeleteConfirm(persona.id)}
-                      className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-glass-white transition-colors"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
+                    {!persona.isDefault && (
+                      <button
+                        onClick={() => setDeleteConfirm(persona.id)}
+                        className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-glass-white transition-colors"
+                        title={t('personas.delete')}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                )}
               </motion.div>
             )
           )}
@@ -431,26 +587,70 @@ export function PersonasPage() {
       <Modal
         isOpen={!!deleteConfirm}
         onClose={() => setDeleteConfirm(null)}
-        title="Delete Persona"
+        title={t('personas.deletePersona')}
         size="sm"
       >
         <div className="space-y-4">
           <p className="text-gray-300">
-            Are you sure you want to delete this persona? This action cannot be undone.
+            {t('personas.deleteConfirmSimple')}
           </p>
           <div className="flex gap-3 justify-end">
             <Button variant="ghost" onClick={() => setDeleteConfirm(null)}>
-              Cancel
+              {t('personas.cancel')}
             </Button>
             <Button
               variant="danger"
               onClick={() => deleteConfirm && handleDelete(deleteConfirm)}
             >
-              Delete
+              {t('personas.delete')}
             </Button>
           </div>
         </div>
       </Modal>
+
+      {/* Batch Delete Confirmation */}
+      <ConfirmDialog
+        isOpen={deleteSelectedConfirm}
+        onClose={() => setDeleteSelectedConfirm(false)}
+        onConfirm={handleDeleteSelected}
+        title={t('chatsList.deleteSelectedTitle', { count: selectedIds.size })}
+        message={t('chatsList.deleteSelectedConfirm', { count: selectedIds.size })}
+        confirmText={isBatchDeleting ? t('common.loading') : t('common.delete')}
+        variant="danger"
+      />
+
+      {/* AI 创建人设弹窗 */}
+      {showAIPersona && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowAIPersona(false)}>
+          <div className="bg-white dark:bg-gray-800 rounded-xl border w-full max-w-md mx-4 p-4" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold text-sm mb-3">AI 创建人设</h3>
+            <select value={selectedBookId} onChange={e => setSelectedBookId(e.target.value)} className="w-full mb-2 px-3 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900">
+              <option value="">参考世界观组</option>
+              {worldInfoBooks.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+            <select value={selectedGroupId} onChange={e => setSelectedGroupId(e.target.value)} className="w-full mb-2 px-3 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900">
+              <option value="">参考角色组</option>
+              {Array.from(characterGroups.entries())
+                .filter(([id]) => id !== selectedBookId)
+                .map(([id, { count }]) => {
+                  const book = worldInfoBooks.find(b => b.id === id);
+                  return <option key={id} value={id}>{book?.name || '未命名分组'}（{count}个角色）</option>;
+                })}
+            </select>
+            <select value={selectedCharId} onChange={e => setSelectedCharId(e.target.value)} className="w-full mb-2 px-3 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900">
+              <option value="">参考角色</option>
+              {allCharacters.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <textarea value={aiPersonaPrompt} onChange={e => setAiPersonaPrompt(e.target.value)} placeholder="描述你想要的人设特征、身份、背景..." className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-gray-900 mb-3" rows={4} />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowAIPersona(false)} className="px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-lg">取消</button>
+              <button onClick={handleAICreatePersona} disabled={aiPersonaGenerating || !aiPersonaPrompt.trim()} className="px-4 py-2 text-sm bg-parlor-500 text-white rounded-lg disabled:opacity-50">
+                {aiPersonaGenerating ? '生成中...' : 'AI 创建'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -464,6 +664,7 @@ interface PersonaModalProps {
 }
 
 function PersonaModal({ isOpen, onClose, persona, onSave }: PersonaModalProps) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [avatar, setAvatar] = useState<string | undefined>();
@@ -527,7 +728,7 @@ function PersonaModal({ isOpen, onClose, persona, onSave }: PersonaModalProps) {
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={persona ? 'Edit Persona' : 'New Persona'}
+      title={persona ? t('personas.editPersona') : t('personas.newPersonaTitle')}
       size="md"
     >
       <div className="space-y-4">
@@ -559,36 +760,36 @@ function PersonaModal({ isOpen, onClose, persona, onSave }: PersonaModalProps) {
           </div>
           <div className="flex-1">
             <p className="text-sm text-gray-400">
-              Upload an avatar image for your persona
+              {t('personas.uploadAvatarHint')}
             </p>
             <p className="text-xs text-gray-500 mt-1">
-              Click the button on the avatar to upload
+              {t('personas.uploadAvatarDetail')}
             </p>
           </div>
         </div>
 
         <Input
-          label="Name"
+          label={t('personas.name')}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Your persona's name"
+          placeholder={t('personas.namePlaceholder')}
           required
         />
         
         <Textarea
-          label="Description"
+          label={t('personas.description')}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="Describe who you are in roleplays. This helps the AI understand your character..."
+          placeholder={t('personas.descriptionPlaceholder')}
           rows={4}
         />
 
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t('personas.cancel')}
           </Button>
           <Button onClick={handleSave} isLoading={isLoading} disabled={!name.trim()}>
-            {persona ? 'Save Changes' : 'Create Persona'}
+            {persona ? t('personas.saveChanges') : t('personas.createPersonaBtn')}
           </Button>
         </div>
       </div>

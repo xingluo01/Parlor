@@ -4,6 +4,7 @@
  */
 
 import type {
+  AuthorNotePreset,
   CharacterCard,
   Persona,
   ChatSession,
@@ -17,43 +18,76 @@ import type {
   DataBankDocument,
 } from '../types';
 import { generateUUID } from '../utils/uuid';
+import { normalizeCharacterCard, normalizeWorldInfo, normalizeLorebookEntries } from '../utils/normalizeLorebook';
 
 // Use a relative URL so requests always go to the same origin (Vite proxies /api → :3001)
-const API_URL = '/api';
+export const API_URL = '/api';
+
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Create an AbortController that rejects after `ms` milliseconds. */
+function withTimeout(ms: number): { signal: AbortSignal; clear: () => void } {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), ms);
+  return { signal: controller.signal, clear: () => clearTimeout(id) };
+}
 
 // Generic API helpers
-async function apiGet<T>(endpoint: string): Promise<T> {
-  const response = await fetch(`${API_URL}${endpoint}`);
-  if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
-  return response.json();
+async function apiGet<T>(endpoint: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+  const { signal, clear } = withTimeout(timeoutMs);
+  try {
+    const response = await fetch(`${API_URL}${endpoint}`, { signal });
+    if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
+    return response.json();
+  } finally {
+    clear();
+  }
 }
 
-async function apiPost<T>(endpoint: string, data?: unknown): Promise<T> {
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
-  return response.json();
+async function apiPost<T>(endpoint: string, data?: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+  const { signal, clear } = withTimeout(timeoutMs);
+  try {
+    const response = await fetch(`${API_URL}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      signal,
+    });
+    if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
+    return response.json();
+  } finally {
+    clear();
+  }
 }
 
-async function apiPut<T>(endpoint: string, data: unknown): Promise<T> {
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
-  return response.json();
+async function apiPut<T>(endpoint: string, data: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+  const { signal, clear } = withTimeout(timeoutMs);
+  try {
+    const response = await fetch(`${API_URL}${endpoint}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      signal,
+    });
+    if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
+    return response.json();
+  } finally {
+    clear();
+  }
 }
 
-async function apiDelete<T>(endpoint: string): Promise<T> {
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: 'DELETE',
-  });
-  if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
-  return response.json();
+async function apiDelete<T>(endpoint: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+  const { signal, clear } = withTimeout(timeoutMs);
+  try {
+    const response = await fetch(`${API_URL}${endpoint}`, {
+      method: 'DELETE',
+      signal,
+    });
+    if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
+    return response.json();
+  } finally {
+    clear();
+  }
 }
 
 // Flag to track if we've initialized this session
@@ -122,14 +156,18 @@ export async function initializeDatabase() {
 export const characterOps = {
   async getAll(): Promise<CharacterCard[]> {
     const chars = await apiGet<CharacterCard[]>('/characters');
-    return chars.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return chars
+      .map(normalizeCharacterCard)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   },
 
   /** Lightweight list: strips avatar/gallery/characterBook/mesExamples/long text fields.
    *  Use this for the characters list page — dramatically smaller payload. */
   async getAllCompact(): Promise<CharacterCard[]> {
     const chars = await apiGet<CharacterCard[]>('/characters?compact=true');
-    return chars.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return chars
+      .map(normalizeCharacterCard)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   },
 
   /** Batch-fetch avatars for a set of character IDs. Returns {id: base64} map. */
@@ -140,7 +178,8 @@ export const characterOps = {
   
   async getById(id: string): Promise<CharacterCard | undefined> {
     try {
-      return await apiGet<CharacterCard>(`/characters/${id}`);
+      const card = await apiGet<CharacterCard>(`/characters/${id}`);
+      return normalizeCharacterCard(card);
     } catch {
       return undefined;
     }
@@ -431,7 +470,8 @@ export const regexOps = {
 // Lorebook operations
 export const lorebookOps = {
   async getAll(): Promise<LorebookEntry[]> {
-    return apiGet<LorebookEntry[]>('/lorebook');
+    const entries = await apiGet<LorebookEntry[]>('/lorebook');
+    return normalizeLorebookEntries(entries) as LorebookEntry[];
   },
   async add(entry: LorebookEntry): Promise<string> {
     await apiPost('/lorebook', entry);
@@ -449,7 +489,8 @@ export const lorebookOps = {
 // World Info operations
 export const worldInfoOps = {
   async getAll(): Promise<WorldInfo[]> {
-    return apiGet<WorldInfo[]>('/worldInfo');
+    const books = await apiGet<WorldInfo[]>('/worldInfo');
+    return books.map(normalizeWorldInfo);
   },
   async add(book: WorldInfo): Promise<string> {
     await apiPost('/worldInfo', book);
@@ -526,6 +567,38 @@ export const dataBankOps = {
     await apiDelete(`/databank/${id}`);
   },
 };
+
+// Author Note Preset operations
+export const authorNoteOps = {
+  async getAll(): Promise<AuthorNotePreset[]> {
+    return apiGet<AuthorNotePreset[]>('/authorNotes');
+  },
+  async getEnabled(): Promise<AuthorNotePreset[]> {
+    const all = await this.getAll();
+    return all.filter(p => p.enabled);
+  },
+  async add(preset: AuthorNotePreset): Promise<string> {
+    await apiPost('/authorNotes', preset);
+    return preset.id;
+  },
+  async update(id: string, updates: Partial<AuthorNotePreset>): Promise<number> {
+    await apiPut(`/authorNotes/${id}`, { ...updates, updatedAt: Date.now() });
+    return 1;
+  },
+  async delete(id: string): Promise<void> {
+    await apiDelete(`/authorNotes/${id}`);
+  },
+};
+
+/** Get combined content from all enabled presets */
+export async function getCombinedAuthorNotePresets(): Promise<string> {
+  const presets = await authorNoteOps.getEnabled();
+  if (presets.length === 0) return '';
+  return presets
+    .map(p => p.content.trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
 
 // Settings operations
 export const settingsOps = {

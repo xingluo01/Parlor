@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { RefreshCw, Wifi, WifiOff, Check, AlertTriangle } from 'lucide-react';
 import { Button } from '../../components/ui';
 import { syncNow, startAutoSync, stopAutoSync, onSyncStatus } from '../../services/sync';
@@ -11,6 +12,7 @@ type Props = {
 };
 
 export function SyncSettings({ settings, onUpdate }: Props) {
+  const { t } = useTranslation();
   const [remoteUrl, setRemoteUrl] = useState(settings?.syncRemoteUrl || '');
   const [enabled, setEnabled] = useState(settings?.syncEnabled || false);
   const [interval, setInterval_] = useState(settings?.syncIntervalMinutes || 5);
@@ -92,7 +94,7 @@ export function SyncSettings({ settings, onUpdate }: Props) {
   };
 
   const formatTime = (ts?: number) => {
-    if (!ts) return 'Never';
+    if (!ts) return t('settings.sync.lastSyncNever');
     const d = new Date(ts);
     return d.toLocaleString();
   };
@@ -105,15 +107,15 @@ export function SyncSettings({ settings, onUpdate }: Props) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-white mb-1">Sync</h2>
+        <h2 className="text-lg font-semibold text-white mb-1">{t('settings.sync.title')}</h2>
         <p className="text-sm text-gray-600">
-          Sync your data between devices running Parlor on the same network.
+          {t('settings.sync.syncDesc')}
         </p>
       </div>
 
       {/* Remote URL */}
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-gray-400">Remote Server URL</label>
+        <label className="block text-sm font-medium text-gray-400">{t('settings.sync.remoteServerUrl')}</label>
         <div className="relative">
           <input
             type="text"
@@ -128,18 +130,18 @@ export function SyncSettings({ settings, onUpdate }: Props) {
           </div>
         </div>
         {reachable === false && remoteUrl && (
-          <p className="text-xs text-red-400">Cannot reach server. Check the URL and ensure both devices are on the same network.</p>
+          <p className="text-xs text-red-400">{t('settings.sync.cannotReachServer')}</p>
         )}
         {reachable === true && (
-          <p className="text-xs text-green-400">Server reachable</p>
+          <p className="text-xs text-green-400">{t('settings.sync.serverReachable')}</p>
         )}
       </div>
 
       {/* Enable toggle */}
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-sm font-medium text-gray-300">Auto-Sync</div>
-          <div className="text-xs text-gray-600">Automatically sync in the background</div>
+          <div className="text-sm font-medium text-gray-300">{t('settings.sync.autoSync')}</div>
+          <div className="text-xs text-gray-600">{t('settings.sync.autoSyncDesc')}</div>
         </div>
         <button
           onClick={() => setEnabled(!enabled)}
@@ -153,7 +155,7 @@ export function SyncSettings({ settings, onUpdate }: Props) {
       {enabled && (
         <div className="space-y-2">
           <label className="block text-sm font-medium text-gray-400">
-            Sync Interval: {interval} minute{interval !== 1 ? 's' : ''}
+            {t('settings.sync.title')}: {interval} min
           </label>
           <input
             type="range"
@@ -164,8 +166,8 @@ export function SyncSettings({ settings, onUpdate }: Props) {
             className="w-full accent-parlor-500"
           />
           <div className="flex justify-between text-xs text-gray-700">
-            <span>1 min</span>
-            <span>60 min</span>
+            <span>{t('settings.sync.syncIntervalMin')}</span>
+            <span>{t('settings.sync.syncIntervalMax')}</span>
           </div>
         </div>
       )}
@@ -180,35 +182,35 @@ export function SyncSettings({ settings, onUpdate }: Props) {
           className="gap-2"
         >
           <RefreshCw className={`w-4 h-4 ${status === 'syncing' ? 'animate-spin' : ''}`} />
-          {status === 'syncing' ? 'Syncing...' : 'Sync Now'}
+          {status === 'syncing' ? t('settings.sync.syncing') : t('settings.sync.syncNow')}
         </Button>
 
         {status === 'success' && lastResult && (
           <span className="flex items-center gap-1.5 text-xs text-green-400">
             <Check className="w-3.5 h-3.5" />
             {totalPulled + totalPushedCount === 0
-              ? 'Already in sync'
-              : `${totalPulled} pulled, ${totalPushedCount} pushed`}
+              ? t('settings.sync.alreadyInSync')
+              : t('settings.sync.syncResult', { pulled: totalPulled, pushed: totalPushedCount })}
           </span>
         )}
 
         {status === 'error' && (
           <span className="flex items-center gap-1.5 text-xs text-red-400">
             <AlertTriangle className="w-3.5 h-3.5" />
-            {errorMsg || 'Sync failed'}
+            {errorMsg || t('settings.sync.syncFailed')}
           </span>
         )}
       </div>
 
       {/* Last sync info */}
       <div className="text-xs text-gray-600">
-        Last synced: {formatTime(settings?.lastSyncAt)}
+        {t('settings.sync.lastSync')}: {formatTime(settings?.lastSyncAt)}
       </div>
 
       {/* Save */}
       {hasChanges && (
         <Button variant="primary" size="sm" onClick={handleSave}>
-          Save Changes
+          {t('common.save')}
         </Button>
       )}
     </div>

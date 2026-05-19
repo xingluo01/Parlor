@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Download, Upload, Trash2 } from 'lucide-react';
 import { Button, ConfirmDialog } from '../../components/ui';
 import { backupOps } from '../../db';
@@ -11,6 +12,7 @@ export function BackupSettings({
   onQuickBackup: () => void;
   onFullBackup: () => void;
 }) {
+  const { t } = useTranslation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [nukeConfirm, setNukeConfirm] = useState(false);
   const [isNuking, setIsNuking] = useState(false);
@@ -37,30 +39,30 @@ export function BackupSettings({
 
   return (
     <div>
-      <h2 className="text-lg font-semibold text-white mb-4 font-serif tracking-tight">Backup & Restore</h2>
+      <h2 className="text-lg font-semibold text-white mb-4 font-serif tracking-tight">{t('settings.backup.title')}</h2>
 
       <div className="space-y-6">
         {/* Backup Section */}
         <div>
-          <h3 className="text-sm font-medium text-gray-300 mb-3">Create Backup</h3>
+          <h3 className="text-sm font-medium text-gray-300 mb-3">{t('settings.backup.createBackup')}</h3>
           <div className="flex flex-wrap gap-3">
             <Button variant="secondary" onClick={onQuickBackup}>
               <Download className="w-4 h-4" />
-              Quick Backup
+              {t('settings.backup.quickBackup')}
             </Button>
             <Button variant="secondary" onClick={onFullBackup}>
               <Download className="w-4 h-4" />
-              Full Backup
+              {t('settings.backup.fullBackup')}
             </Button>
           </div>
           <p className="text-xs text-gray-500 mt-2">
-            Quick backup includes characters, personas, and settings. Full backup includes all chat history.
+            {t('settings.backup.quickBackupDesc')}
           </p>
         </div>
 
         {/* Restore Section */}
         <div>
-          <h3 className="text-sm font-medium text-gray-300 mb-3">Restore from Backup</h3>
+          <h3 className="text-sm font-medium text-gray-300 mb-3">{t('settings.backup.restoreBackup')}</h3>
           <input
             ref={fileInputRef}
             type="file"
@@ -70,18 +72,18 @@ export function BackupSettings({
           />
           <Button variant="secondary" onClick={() => fileInputRef.current?.click()}>
             <Upload className="w-4 h-4" />
-            Import Backup
+            {t('common.import')}
           </Button>
           <p className="text-xs text-gray-500 mt-2">
-            This will replace your current data with the backup. Make sure to create a backup first!
+            {t('settings.backup.restoreWarning')}
           </p>
         </div>
 
         {/* Danger Zone */}
         <div className="border border-red-500/30 rounded-xl p-4 bg-red-500/5">
-          <h3 className="text-sm font-medium text-red-400 mb-1">Danger Zone</h3>
+          <h3 className="text-sm font-medium text-red-400 mb-1">{t('characterDetail.dangerZone')}</h3>
           <p className="text-xs text-gray-500 mb-3">
-            Permanently deletes all characters, chats, personas, presets, connections, regex scripts, and lorebook entries. The app will reload and reinitialise with defaults.
+            {t('settings.backup.deleteEverythingDesc')}
           </p>
           <Button
             variant="danger"
@@ -90,7 +92,7 @@ export function BackupSettings({
             isLoading={isNuking}
           >
             <Trash2 className="w-4 h-4" />
-            Delete Everything
+            {t('settings.backup.deleteEverything')}
           </Button>
         </div>
       </div>
@@ -108,9 +110,9 @@ export function BackupSettings({
             setNukeConfirm(false);
           }
         }}
-        title="Delete Everything"
-        message="This will permanently wipe all characters, chats, personas, presets, connections, regex scripts, and lorebook entries. There is no undo. Are you absolutely sure?"
-        confirmText="Yes, delete everything"
+        title={t('settings.backup.deleteEverything')}
+        message={t('settings.backup.deleteEverythingConfirm')}
+        confirmText={t('common.yes')}
         variant="danger"
       />
     </div>

@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { generateUUID } from '../utils/uuid';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -13,9 +14,12 @@ import {
   Users,
   Download,
   FolderOpen,
+  RefreshCw,
+  ChevronRight,
 } from 'lucide-react';
 import { Button, Avatar } from '../components/ui';
 import { RpContent } from '../components/chat/MessageBubble';
+
 import { groupChatOps, characterOps, connectionOps, presetOps, personaOps, settingsOps } from '../db';
 import { APIClient, buildSystemPrompt, buildMessages, buildDepthInjections } from '../services/api';
 import type {
@@ -29,6 +33,10 @@ import type {
   AppSettings,
 } from '../types';
 import type { DepthInjection } from '../utils/presetImport';
+import { StatusPanel } from '../components/chat';
+import type { CharacterStatus } from '../components/chat/StatusPanel';
+import { extractStatusFromContent, stripStatusBlocks } from '../utils/prompts';
+import { sanitizeFilename } from '../utils/fileExport';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -85,6 +93,14 @@ function pickResponders(
       };
     }
 
+    case 'sequential': {
+      // All active members reply in sequence
+      return {
+        responders: active.map(m => m.characterId),
+        nextTurnIndex: currentTurnIndex,
+      };
+    }
+
     case 'manual':
     default:
       // Manual mode: caller picks, return empty here
@@ -99,8 +115,9 @@ function buildGroupSystemPrompt(
   members: GroupMember[],
   persona: Persona | null,
   preset: Preset | null,
+  responseLength?: 'short' | 'medium' | 'long',
 ): string {
-  const base = buildSystemPrompt(character, persona, character.systemPrompt, preset);
+  const base = buildSystemPrompt(character, persona, character.systemPrompt, preset, responseLength);
 
   // Append group context — mention other characters in the scene
   const others = members
@@ -130,6 +147,7 @@ function buildGroupSystemPrompt(
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function GroupChatPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { id: groupId } = useParams();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -155,6 +173,21 @@ export function GroupChatPage() {
   const [streamingCharId, setStreamingCharId] = useState<string | null>(null);
   const [showActionsMenu, setShowActionsMenu] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+
+  // Scroll tick — periodic increment during generation to keep scrolling smoothly
+  const [scrollTick, setScrollTick] = useState(0);
+
+  // Message editing state
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
+
+  // Impersonation state
+  const [isImpersonating, setIsImpersonating] = useState(false);
+  const [impersonationCharId, setImpersonationCharId] = useState<string | null>(null);
+
+  // Character status panel state
+  const [characterStatuses, setCharacterStatuses] = useState<CharacterStatus[]>([]);
+  const [statusPage, setStatusPage] = useState(0);
 
   // ── Load group chat and all dependencies ────────────────────────────────
 
@@ -211,11 +244,22 @@ export function GroupChatPage() {
     }
   };
 
+  // ── Poll scrollTick during generation to keep auto-scroll smooth ──────
+  useEffect(() => {
+    if (!isGenerating) return;
+    const timer = setInterval(() => {
+      setScrollTick(t => t + 1);
+    }, 500);
+    return () => clearInterval(timer);
+  }, [isGenerating]);
+
   // ── Scroll behavior ─────────────────────────────────────────────────────
 
   const hasScrolledToBottom = useRef<string | null>(null);
 
   useEffect(() => {
+    // 群聊切换时重置状态
+    setCharacterStatuses([]);
     if (!isLoading && groupChat && hasScrolledToBottom.current !== groupChat.id) {
       hasScrolledToBottom.current = groupChat.id;
       requestAnimationFrame(() => {
@@ -225,10 +269,10 @@ export function GroupChatPage() {
   }, [isLoading, groupChat?.id]);
 
   useEffect(() => {
-    if (hasScrolledToBottom.current === groupChat?.id) {
+    if (hasScrolledToBottom.current === groupChat?.id && settings?.autoScroll) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [groupChat?.messages, isGenerating]);
+  }, [groupChat?.messages, isGenerating, scrollTick, settings?.autoScroll]);
 
   // ── Generation logic ────────────────────────────────────────────────────
 
@@ -236,10 +280,21 @@ export function GroupChatPage() {
   const generateForCharacter = async (
     character: CharacterCard,
     currentMessages: Message[],
+    mentionedCharIds?: Set<string>,
   ): Promise<Message | null> => {
     if (!connection || !preset || !groupChat) return null;
 
-    const systemPrompt = buildGroupSystemPrompt(character, characters, groupChat.members, persona, preset);
+    let systemPrompt = buildGroupSystemPrompt(character, characters, groupChat.members, persona, preset, settings?.responseLength);
+
+    // Natural mode: restrict response to 3 sentences
+    if (groupChat.turnMode === 'natural') {
+      systemPrompt += '\n\n【回复限制】每次回复最多3句话，请简洁自然。';
+    }
+
+    // @mention: urged to respond
+    if (mentionedCharIds?.has(character.id)) {
+      systemPrompt += `\n\n【注意】用户专门提到了你（@${character.name}），请务必回应。`;
+    }
     const depthInjections: DepthInjection[] = [
       ...buildDepthInjections(character, persona, character.systemPrompt, preset),
     ];
@@ -254,6 +309,30 @@ export function GroupChatPage() {
       groupChat.summary,
       preset?.wi_format,
     );
+
+    // 注入当前角色的状态信息（如果存在）
+    const charStatus = characterStatuses.find(s => {
+      const nameLine = s.infoLines.find(l => l.label === '姓名');
+      return nameLine && nameLine.value === character.name;
+    });
+    if (charStatus) {
+      const parts: string[] = [];
+      if (charStatus.sceneHeader) {
+        parts.push(`[场景信息]\n${charStatus.sceneHeader}`);
+      }
+      if (charStatus.infoLines.length > 0) {
+        parts.push(`[角色信息]\n${charStatus.infoLines.map(l => `${l.label}: ${l.value}`).join('\n')}`);
+      }
+      if (charStatus.statusLines.length > 0) {
+        parts.push(`[当前状态]\n${charStatus.statusLines.map(l => `${l.label}: ${l.value}`).join('\n')}`);
+      }
+      if (parts.length > 0) {
+        apiMessages.push({
+          role: 'system',
+          content: `[当前状态参考]\n以下是当前已知的角色信息与状态，请基于此保持一致性：\n\n${parts.join('\n\n')}`,
+        });
+      }
+    }
 
     const client = new APIClient(connection, preset, settings || undefined);
     apiClientRef.current = client;
@@ -304,27 +383,31 @@ export function GroupChatPage() {
   };
 
   /** Run the full generation pipeline: save user message, pick responders, generate. */
-  const runGeneration = async (responderIds: string[], messagesWithUser: Message[]) => {
+  const runGeneration = async (responderIds: string[], messagesWithUser: Message[], mentionedCharIds?: Set<string>) => {
     if (!groupChat) return;
     setIsGenerating(true);
 
-    let currentMessages = [...messagesWithUser];
+    try {
+      let currentMessages = [...messagesWithUser];
 
-    for (const charId of responderIds) {
-      const char = characters.get(charId);
-      if (!char) continue;
+      for (const charId of responderIds) {
+        const char = characters.get(charId);
+        if (!char) continue;
 
-      const msg = await generateForCharacter(char, currentMessages);
-      if (msg) {
-        currentMessages = [...currentMessages, msg];
-        // Persist incrementally
-        const updated = { ...groupChat, messages: currentMessages, updatedAt: Date.now() };
-        await groupChatOps.update(groupChat.id, { messages: currentMessages });
-        setGroupChat(updated);
+        const msg = await generateForCharacter(char, currentMessages, mentionedCharIds);
+        if (msg) {
+          currentMessages = [...currentMessages, msg];
+          // Persist incrementally
+          const updated = { ...groupChat, messages: currentMessages, updatedAt: Date.now() };
+          await groupChatOps.update(groupChat.id, { messages: currentMessages });
+          setGroupChat(updated);
+        }
       }
+    } catch (e) {
+      console.error('[GroupChatPage] runGeneration failed:', e);
+    } finally {
+      setIsGenerating(false);
     }
-
-    setIsGenerating(false);
   };
 
   // ── Send user message ───────────────────────────────────────────────────
@@ -337,41 +420,73 @@ export function GroupChatPage() {
     }
 
     setIsSending(true);
-    const userContent = inputValue.trim();
-    setInputValue('');
+    try {
+      const userContent = inputValue.trim();
+      setInputValue('');
 
-    const userMessage: Message = {
-      id: generateUUID(),
-      role: 'user',
-      content: userContent,
-      timestamp: Date.now(),
-    };
+      const userMessage: Message = {
+        id: generateUUID(),
+        role: 'user',
+        content: userContent,
+        timestamp: Date.now(),
+      };
 
-    const updatedMessages = [...groupChat.messages, userMessage];
-    const updated = { ...groupChat, messages: updatedMessages, updatedAt: Date.now() };
-    await groupChatOps.update(groupChat.id, { messages: updatedMessages });
-    setGroupChat(updated);
+      const updatedMessages = [...groupChat.messages, userMessage];
+      const updated = { ...groupChat, messages: updatedMessages, updatedAt: Date.now() };
+      await groupChatOps.update(groupChat.id, { messages: updatedMessages });
+      setGroupChat(updated);
 
-    if (groupChat.turnMode === 'manual') {
-      // Manual mode: don't auto-generate, user will pick via character buttons
+      if (groupChat.turnMode === 'manual') {
+        // Manual mode: don't auto-generate, user will pick via character buttons
+        return;
+      }
+
+      // ── @mention parsing ──────────────────────────────────────────────────
+      const mentionRegex = /@([^\s，,。！？、\n]+)/g;
+      const mentionedNames: string[] = [];
+      let mentionMatch;
+      while ((mentionMatch = mentionRegex.exec(userContent)) !== null) {
+        mentionedNames.push(mentionMatch[1].trim());
+      }
+
+      const mentionedCharIds = new Set<string>();
+      if (mentionedNames.length > 0) {
+        for (const [charId, char] of characters.entries()) {
+          if (mentionedNames.includes(char.name)) {
+            mentionedCharIds.add(charId);
+          }
+        }
+      }
+      // ── @mention parsing end ──────────────────────────────────────────────
+
+      // Determine responders
+      let { responders, nextTurnIndex } = pickResponders(
+        groupChat.members,
+        characters,
+        groupChat.turnMode,
+        groupChat.currentTurnIndex ?? 0,
+      );
+
+      // Force @mentioned characters into the responder list
+      if (mentionedCharIds.size > 0) {
+        for (const charId of mentionedCharIds) {
+          if (!responders.includes(charId)) {
+            responders.push(charId);
+          }
+        }
+      }
+
+      // Update turn index (only used by 'list' and 'turn' modes)
+      if (nextTurnIndex !== (groupChat.currentTurnIndex ?? 0)) {
+        await groupChatOps.update(groupChat.id, { currentTurnIndex: nextTurnIndex });
+      }
+
+      await runGeneration(responders, updatedMessages, mentionedCharIds);
+    } catch (e) {
+      console.error('[GroupChatPage] Send failed:', e);
+    } finally {
       setIsSending(false);
-      return;
     }
-
-    // Determine responders
-    const { responders, nextTurnIndex } = pickResponders(
-      groupChat.members,
-      characters,
-      groupChat.turnMode,
-      groupChat.currentTurnIndex ?? 0,
-    );
-
-    if (nextTurnIndex !== (groupChat.currentTurnIndex ?? 0)) {
-      await groupChatOps.update(groupChat.id, { currentTurnIndex: nextTurnIndex });
-    }
-
-    await runGeneration(responders, updatedMessages);
-    setIsSending(false);
   };
 
   // ── Manual mode: pick a character to speak ──────────────────────────────
@@ -431,6 +546,84 @@ export function GroupChatPage() {
     navigator.clipboard.writeText(content);
   }, []);
 
+  // ── Message editing ──────────────────────────────────────────────────────
+
+  const handleEditMessage = useCallback((msgId: string) => {
+    const msg = groupChat?.messages.find(m => m.id === msgId);
+    if (!msg) return;
+    setEditingMessageId(msgId);
+    setEditContent(msg.content);
+  }, [groupChat]);
+
+  const handleSaveEdit = useCallback(async () => {
+    if (!groupChat || !editingMessageId || !editContent.trim()) return;
+    const updated = groupChat.messages.map(m =>
+      m.id === editingMessageId ? { ...m, content: editContent } : m
+    );
+    await groupChatOps.update(groupChat.id, { messages: updated });
+    setGroupChat({ ...groupChat, messages: updated, updatedAt: Date.now() });
+    setEditingMessageId(null);
+    setEditContent('');
+  }, [groupChat, editingMessageId, editContent]);
+
+  // ── Regenerate ────────────────────────────────────────────────────────────
+
+  const handleRegenerate = useCallback(async (msg: Message) => {
+    if (!groupChat) return;
+    const idx = groupChat.messages.findIndex(m => m.id === msg.id);
+    if (idx === -1) return;
+    const truncated = groupChat.messages.slice(0, idx);
+    await groupChatOps.update(groupChat.id, { messages: truncated });
+    setGroupChat({ ...groupChat, messages: truncated, updatedAt: Date.now() });
+
+    const char = characters.get(msg.characterId || '');
+    if (!char) return;
+
+    setIsGenerating(true);
+    const newMsg = await generateForCharacter(char, truncated);
+    if (newMsg) {
+      const updated = [...truncated, newMsg];
+      await groupChatOps.update(groupChat.id, { messages: updated });
+      setGroupChat({ ...groupChat, messages: updated, updatedAt: Date.now() });
+    }
+    setIsGenerating(false);
+  }, [groupChat, characters]);
+
+  // ── Continue generation ────────────────────────────────────────────────────
+
+  const handleContinue = useCallback(async () => {
+    if (!groupChat) return;
+
+    const messages = groupChat.messages;
+    const lastMsg = messages[messages.length - 1];
+    if (!lastMsg || lastMsg.role !== 'assistant' || !lastMsg.characterId) return;
+
+    const continueChar = characters.get(lastMsg.characterId);
+    if (!continueChar) return;
+
+    setIsGenerating(true);
+
+    try {
+      // Reuse generateForCharacter with messages excluding the last one,
+      // then append the result to the last message instead of creating a new one
+      const result = await generateForCharacter(continueChar, messages.slice(0, -1));
+
+      if (result && result.content.trim()) {
+        const updatedMessages = messages.map((msg, idx) =>
+          idx === messages.length - 1
+            ? { ...msg, content: msg.content + '\n' + result.content.trim() }
+            : msg
+        );
+        await groupChatOps.update(groupChat.id, { messages: updatedMessages });
+        setGroupChat(prev => prev ? { ...prev, messages: updatedMessages, updatedAt: Date.now() } : prev);
+      }
+    } catch (e: any) {
+      console.error('Continue generation failed:', e);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [groupChat, characters]);
+
   // ── Key handler ─────────────────────────────────────────────────────────
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -449,6 +642,76 @@ export function GroupChatPage() {
       default: return 'md';
     }
   };
+
+  // ── Session aggregated metadata from responseMeta ──────────────────────
+
+  const sessionMeta = useMemo(() => {
+    if (!groupChat?.messages) return null;
+    const msgs = groupChat.messages.filter(m => m.responseMeta);
+    if (msgs.length === 0) return null;
+    let totalTokens = 0;
+    let totalTimeMs = 0;
+    let currentTimeMs = 0;
+    msgs.forEach(m => {
+      if (m.responseMeta?.totalTokens) totalTokens += m.responseMeta.totalTokens;
+      if (m.responseMeta?.responseTimeMs) {
+        totalTimeMs += m.responseMeta.responseTimeMs;
+        currentTimeMs = m.responseMeta.responseTimeMs;
+      }
+    });
+    return { totalTokens, totalTimeMs, currentTimeMs, msgCount: msgs.length };
+  }, [groupChat?.messages]);
+
+  // ── Extract character status from the last assistant message ──────────
+  useEffect(() => {
+    if (!groupChat?.messages) return;
+    const lastMsg = groupChat.messages[groupChat.messages.length - 1];
+    if (!lastMsg || lastMsg.role !== 'assistant') return;
+
+    const { sceneHeader, infoLines, statusLines } = extractStatusFromContent(lastMsg.content, settings?.statusFieldConfig);
+    if (infoLines.length > 0 || statusLines.length > 0) {
+      setCharacterStatuses(prev => {
+        const updated = [...prev];
+        const char = lastMsg.characterId ? characters.get(lastMsg.characterId) : null;
+        const name = char?.name || '角色';
+        const existing = updated.findIndex(s => {
+          const nameMatch = s.infoLines.find(l => l.label === '姓名');
+          return nameMatch && nameMatch.value === name;
+        });
+        const newStatus: CharacterStatus = { sceneHeader, infoLines, statusLines };
+        if (existing >= 0) {
+          // 合并更新：保留旧状态中未被新状态覆盖的字段
+          const oldStatus = updated[existing];
+
+          // 合并状态行
+          const mergedLines = [...(newStatus.statusLines || [])];
+          const oldLines = oldStatus.statusLines || [];
+          for (const oldLine of oldLines) {
+            const exists = mergedLines.some(l => l.label === oldLine.label);
+            if (!exists) mergedLines.push(oldLine);
+          }
+
+          // 合并角色信息
+          const mergedInfo = [...(newStatus.infoLines || [])];
+          const oldInfo = oldStatus.infoLines || [];
+          for (const oldLine of oldInfo) {
+            const exists = mergedInfo.some(l => l.label === oldLine.label);
+            if (!exists) mergedInfo.push(oldLine);
+          }
+
+          updated[existing] = {
+            sceneHeader: newStatus.sceneHeader || oldStatus.sceneHeader,
+            infoLines: mergedInfo,
+            statusLines: mergedLines,
+          };
+        } else {
+          updated.push(newStatus);
+        }
+        return updated;
+      });
+      setStatusPage(0);
+    }
+  }, [groupChat?.messages]);
 
   // ── Determine if we should show the manual picker ───────────────────────
 
@@ -482,7 +745,7 @@ export function GroupChatPage() {
     const content = header + body;
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([content], { type: 'text/plain' }));
-    a.download = `${groupChat.name.replace(/[^a-z0-9_\- ]/gi, '_').trim()}.txt`;
+    a.download = `${sanitizeFilename(groupChat.name)}.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -511,9 +774,9 @@ export function GroupChatPage() {
   if (!groupChat) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-4">
-        <p className="text-gray-400">Group chat not found</p>
+        <p className="text-gray-400">{t('groups.notFound')}</p>
         <Button className="mt-4" onClick={() => navigate('/chats')}>
-          Back to Chats
+          {t('groups.backToChats')}
         </Button>
       </div>
     );
@@ -554,8 +817,14 @@ export function GroupChatPage() {
               <div className="text-left min-w-0">
                 <h1 className="font-semibold text-white text-sm sm:text-base truncate font-serif tracking-tight">{groupChat.name}</h1>
                 <p className="text-xs text-gray-500 truncate">
-                  {groupChat.members.length} members · {groupChat.messages.length} messages
+                  {t('groups.membersAndMessages', { members: groupChat.members.length, messages: groupChat.messages.length })}
                 </p>
+                {sessionMeta && (
+                  <div className="flex items-center gap-2 text-[10px] text-gray-500 mt-0.5">
+                    <span>🪙 {sessionMeta.totalTokens.toLocaleString()} tokens</span>
+                    <span>⏱ 当前 {(sessionMeta.currentTimeMs / 1000).toFixed(1)}s / 总计 {(sessionMeta.totalTimeMs / 1000).toFixed(1)}s</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -589,22 +858,22 @@ export function GroupChatPage() {
                       <button
                         onClick={() => {
                           setShowActionsMenu(false);
-                          navigate(`/group-chats/${groupChat.id}/edit`);
+                          navigate(`/groups/${groupChat.id}/edit`);
                         }}
                         className="w-full px-3 py-2 text-left text-sm text-gray-300 hover:text-white hover:bg-glass-white flex items-center gap-2"
                       >
                         <Edit3 className="w-4 h-4" />
-                        Edit Group
+                        {t('groups.editGroup')}
                       </button>
                       <button
                         onClick={() => {
                           setShowActionsMenu(false);
-                          navigate(`/group-chats/${groupChat.id}/members`);
+                          navigate(`/groups/${groupChat.id}/edit`);
                         }}
                         className="w-full px-3 py-2 text-left text-sm text-gray-300 hover:text-white hover:bg-glass-white flex items-center gap-2"
                       >
                         <Users className="w-4 h-4" />
-                        Manage Members
+                        {t('groups.manageMembers')}
                       </button>
                       <button
                         onClick={() => {
@@ -614,7 +883,7 @@ export function GroupChatPage() {
                         className="w-full px-3 py-2 text-left text-sm text-gray-300 hover:text-white hover:bg-glass-white flex items-center gap-2"
                       >
                         <FolderOpen className="w-4 h-4" />
-                        All Chats
+                        {t('groups.allChats')}
                       </button>
                       <div className="border-t border-glass-border my-1" />
                       <button
@@ -625,7 +894,7 @@ export function GroupChatPage() {
                         className="w-full px-3 py-2 text-left text-sm text-gray-300 hover:text-white hover:bg-glass-white flex items-center gap-2"
                       >
                         <Download className="w-4 h-4" />
-                        Export as Text
+                        {t('groups.exportText')}
                       </button>
                       <div className="border-t border-glass-border my-1" />
                       <button
@@ -636,7 +905,7 @@ export function GroupChatPage() {
                         className="w-full px-3 py-2 text-left text-sm text-red-400 hover:text-red-300 hover:bg-red-500/10 flex items-center gap-2"
                       >
                         <Trash2 className="w-4 h-4" />
-                        Delete Group Chat
+                        {t('groups.deleteGroupChat')}
                       </button>
                     </motion.div>
                   </>
@@ -647,11 +916,17 @@ export function GroupChatPage() {
         </div>
       </div>
 
+      {/* Content + Status Panel Row */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Inner column: messages + controls */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-2 sm:p-3 space-y-2 sm:space-y-3">
         {groupChat.messages.map((message) => {
           const isUser = message.role === 'user';
           const char = getCharacterForMessage(message);
+          const displayContent = message.role === 'assistant' ? stripStatusBlocks(message.content) : message.content;
 
           return (
             <motion.div
@@ -686,9 +961,33 @@ export function GroupChatPage() {
                       : 'bg-dark-100/70 border border-glass-border'}
                   `}
                 >
-                  <div className="text-gray-200 whitespace-pre-wrap break-words prose prose-invert prose-sm max-w-none text-[13px] leading-relaxed sm:text-sm">
-                    <RpContent content={message.content} />
-                  </div>
+                  {editingMessageId === message.id ? (
+                    <div className="flex flex-col gap-2">
+                      <textarea
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        className="w-full bg-dark-200 border border-glass-border rounded-lg px-3 py-2 text-white text-sm resize-none focus:outline-none focus:border-parlor-500/50 min-h-[80px]"
+                      />
+                      <div className="flex gap-2 justify-end">
+                        <button
+                          onClick={() => { setEditingMessageId(null); setEditContent(''); }}
+                          className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded-md bg-dark-200"
+                        >
+                          {t('common.cancel')}
+                        </button>
+                        <button
+                          onClick={handleSaveEdit}
+                          className="text-xs text-white px-2 py-1 rounded-md bg-parlor-600 hover:bg-parlor-500"
+                        >
+                          {t('common.save')}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-gray-200 whitespace-pre-wrap break-words prose prose-invert prose-sm max-w-none text-[13px] leading-relaxed sm:text-sm">
+                      <RpContent content={displayContent} />
+                    </div>
+                  )}
 
                   {/* Hover actions */}
                   <div
@@ -702,14 +1001,30 @@ export function GroupChatPage() {
                     <button
                       onClick={() => handleCopy(message.content)}
                       className="p-1.5 rounded-lg bg-dark-100 hover:bg-dark-50"
-                      title="Copy"
+                      title={t('common.copy')}
                     >
                       <Edit3 className="w-4 h-4 text-gray-400" />
+                    </button>
+                    {message.role === 'assistant' && (
+                      <button
+                        onClick={() => handleRegenerate(message)}
+                        className="p-1.5 rounded-lg bg-dark-100 hover:bg-dark-50"
+                        title={t('chat.regenerate')}
+                      >
+                        <RefreshCw className="w-3.5 h-3.5 text-gray-400" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleEditMessage(message.id)}
+                      className="p-1.5 rounded-lg bg-dark-100 hover:bg-dark-50"
+                      title={t('common.edit')}
+                    >
+                      <Edit3 className="w-4 h-4 text-parlor-400" />
                     </button>
                     <button
                       onClick={() => handleDeleteMessage(message.id)}
                       className="p-1.5 rounded-lg bg-dark-100 hover:bg-dark-50"
-                      title="Delete"
+                      title={t('common.delete')}
                     >
                       <Trash2 className="w-4 h-4 text-red-400" />
                     </button>
@@ -791,7 +1106,7 @@ export function GroupChatPage() {
       {/* Manual mode: character picker */}
       {showPickerNow && (
         <div className="flex-shrink-0 border-t border-glass-border bg-dark-200/80 px-2 py-2">
-          <p className="text-xs text-gray-500 mb-1.5 px-1">Choose who speaks next:</p>
+          <p className="text-xs text-gray-500 mb-1.5 px-1">{t('groups.chooseSpeaker')}</p>
           <div className="flex gap-2 overflow-x-auto scrollbar-hide">
             {groupChat.members
               .filter(m => m.isActive)
@@ -814,40 +1129,142 @@ export function GroupChatPage() {
         </div>
       )}
 
+      {/* Impersonation bar */}
+      {isImpersonating && (
+        <div className="flex-shrink-0 border-t border-glass-border bg-dark-200/80 px-2 py-2">
+          <div className="flex items-center gap-2 max-w-4xl mx-auto">
+            <span className="text-xs text-gray-500 whitespace-nowrap">{t('groups.impersonatingAs')}</span>
+            <div className="flex gap-1.5 overflow-x-auto scrollbar-hide flex-1">
+              {groupChat.members
+                .filter(m => m.isActive)
+                .map((m) => {
+                  const char = characters.get(m.characterId);
+                  if (!char) return null;
+                  const isSelected = impersonationCharId === m.characterId;
+                  return (
+                    <button
+                      key={m.characterId}
+                      onClick={() => setImpersonationCharId(m.characterId)}
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border transition-colors flex-shrink-0 ${
+                        isSelected
+                          ? 'bg-parlor-600/20 border-parlor-500/50 text-parlor-300'
+                          : 'bg-dark-100 border-glass-border text-gray-400 hover:text-white hover:border-parlor-500/30'
+                      }`}
+                    >
+                      <Avatar src={char.avatar} name={char.name} size="xs" />
+                      {char.name}
+                    </button>
+                  );
+                })}
+            </div>
+            <button
+              onClick={() => { setIsImpersonating(false); setImpersonationCharId(null); }}
+              className="text-xs text-gray-500 hover:text-white px-2 py-1 rounded-md bg-dark-100 border border-glass-border flex-shrink-0"
+            >
+              {t('common.cancel')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 继续生成按钮 */}
+      {!isGenerating && groupChat.messages.length > 0 && 
+       groupChat.messages[groupChat.messages.length - 1]?.role === 'assistant' && (
+        <div className="flex justify-center py-1 border-t border-glass-border">
+          <button
+            onClick={handleContinue}
+            className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-parlor-400 bg-dark-100/50 hover:bg-dark-100 border border-glass-border rounded-full px-3 py-1.5 transition-colors"
+          >
+            <ChevronRight className="w-3.5 h-3.5 rotate-90" />
+            {t('chat.continueGeneration')}
+          </button>
+        </div>
+      )}
+
       {/* Input Area */}
       <div className="flex-shrink-0 border-t border-glass-border bg-dark-200/95 backdrop-blur-sm px-2 py-2 sm:p-3 safe-bottom">
-        <div className="flex gap-1.5 sm:gap-3 items-stretch max-w-4xl mx-auto">
+        <div className="flex gap-1.5 sm:gap-3 items-end max-w-4xl mx-auto">
           <textarea
             ref={inputRef}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyPress}
-            placeholder="Type a message..."
+            placeholder={isImpersonating ? t('groups.impersonatePlaceholder', { name: characters.get(impersonationCharId || '')?.name || '' }) : t('groups.typeMessage')}
             className="flex-1 min-w-0 resize-none rounded-xl bg-dark-100 border border-glass-border px-3 py-2.5 sm:px-4 sm:py-3 text-white placeholder-gray-500 focus:outline-none focus:border-parlor-500/50 focus:ring-1 focus:ring-parlor-500/30 text-base leading-6 auto-grow-input"
           />
           {isGenerating ? (
             <Button
               onClick={handleStop}
               variant="danger"
-              className="self-end h-10 w-10 sm:h-12 sm:w-12 p-0 rounded-xl flex items-center justify-center flex-shrink-0"
+              className="h-10 w-10 sm:h-12 sm:w-12 p-0 rounded-xl flex items-center justify-center flex-shrink-0"
             >
               <Square className="w-5 h-5" />
             </Button>
           ) : (
-            <Button
-              onClick={handleSend}
-              disabled={!inputValue.trim() || isSending}
-              className="self-end h-10 w-10 sm:h-12 sm:w-12 p-0 rounded-xl flex items-center justify-center flex-shrink-0"
-            >
-              {isSending ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
+            <div className="flex gap-1.5 sm:gap-2 flex-shrink-0">
+              {!isImpersonating ? (
+                <Button
+                  onClick={() => setIsImpersonating(true)}
+                  variant="ghost"
+                  className="h-10 w-10 sm:h-12 sm:w-12 p-0 rounded-xl flex items-center justify-center hover:text-parlor-300"
+                  title={t('chat.impersonate')}
+                >
+                  <Edit3 className="w-4 h-4 text-gray-400" />
+                </Button>
               ) : (
-                <Send className="w-5 h-5" />
+                <Button
+                  onClick={async () => {
+                    if (!inputValue.trim() || !groupChat || !impersonationCharId || isSending) return;
+                    setIsSending(true);
+                    const content = inputValue.trim();
+                    setInputValue('');
+
+                    const impersonatedMsg: Message = {
+                      id: generateUUID(),
+                      role: 'assistant',
+                      content,
+                      timestamp: Date.now(),
+                      characterId: impersonationCharId,
+                    };
+
+                    const updatedMessages = [...groupChat.messages, impersonatedMsg];
+                    await groupChatOps.update(groupChat.id, { messages: updatedMessages });
+                    setGroupChat({ ...groupChat, messages: updatedMessages, updatedAt: Date.now() });
+                    setIsSending(false);
+                    setIsImpersonating(false);
+                    setImpersonationCharId(null);
+                  }}
+                  disabled={!inputValue.trim() || !impersonationCharId || isSending}
+                  className="h-10 w-10 sm:h-12 sm:w-12 p-0 rounded-xl flex items-center justify-center flex-shrink-0"
+                  title={t('groups.sendImpersonated')}
+                >
+                  {isSending ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Send className="w-5 h-5" />
+                  )}
+                </Button>
               )}
-            </Button>
+              <Button
+                onClick={handleSend}
+                disabled={!inputValue.trim() || isSending || isImpersonating}
+                className="h-10 w-10 sm:h-12 sm:w-12 p-0 rounded-xl flex items-center justify-center bg-parlor-500 hover:bg-parlor-400 shadow-lg shadow-parlor-500/20"
+              >
+                <Send className="w-5 h-5" />
+              </Button>
+            </div>
           )}
         </div>
       </div>
+        </div> {/* End inner column */}
+
+        {/* Right Status Panel — always visible */}
+        <StatusPanel
+          statuses={characterStatuses}
+          currentPage={statusPage}
+          onPageChange={setStatusPage}
+        />
+      </div> {/* End content + status panel row */}
 
       {/* Delete Confirmation Dialog */}
       <AnimatePresence>
@@ -866,16 +1283,16 @@ export function GroupChatPage() {
               className="glass p-6 max-w-sm mx-4"
               onClick={(e) => e.stopPropagation()}
             >
-              <h3 className="text-lg font-medium text-white mb-2 font-serif tracking-tight">Delete Group Chat</h3>
+              <h3 className="text-lg font-medium text-white mb-2 font-serif tracking-tight">{t('groups.deleteGroupChat')}</h3>
               <p className="text-sm text-gray-500 mb-4">
-                Are you sure you want to delete "{groupChat.name}"? This cannot be undone.
+                {t('groups.deleteConfirm', { name: groupChat.name })}
               </p>
               <div className="flex gap-2 justify-end">
                 <Button variant="ghost" size="sm" onClick={() => setShowDeleteDialog(false)}>
-                  Cancel
+                  {t('groups.cancel')}
                 </Button>
                 <Button variant="danger" size="sm" onClick={handleDeleteChat}>
-                  Delete
+                  {t('groups.delete')}
                 </Button>
               </div>
             </motion.div>

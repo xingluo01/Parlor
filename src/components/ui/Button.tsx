@@ -1,74 +1,91 @@
 import { forwardRef } from 'react';
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import { motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
+import { playClickSound } from '../../utils/sound';
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
-type ButtonSize = 'sm' | 'md' | 'lg';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+export type ButtonSize = 'sm' | 'md' | 'lg';
 
-interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onDrag' | 'onDragStart' | 'onDragEnd' | 'onAnimationStart'> {
+export interface ButtonProps {
   variant?: ButtonVariant;
   size?: ButtonSize;
   isLoading?: boolean;
-  leftIcon?: ReactNode;
-  rightIcon?: ReactNode;
+  disabled?: boolean;
+  leftIcon?: React.ReactNode;
+  rightIcon?: React.ReactNode;
+  className?: string;
+  children?: React.ReactNode;
+  onClick?: (e: React.MouseEvent) => void;
+  to?: string;          // 导航链接模式
+  title?: string;
+  type?: 'button' | 'submit';
 }
 
-const variantStyles: Record<ButtonVariant, string> = {
-  primary: 'bg-parlor-600 hover:bg-parlor-500 text-white shadow-glow hover:shadow-glow-lg border border-parlor-500/20',
-  secondary: 'bg-dark-50/80 border border-glass-border hover:bg-glass-hover hover:border-parlor-500/15 text-gray-300',
-  ghost: 'text-gray-500 hover:text-gray-200 hover:bg-glass-white border border-transparent',
-  danger: 'bg-red-950/60 hover:bg-red-900/70 text-red-300 border border-red-800/30',
+const variantClasses: Record<string, string> = {
+  primary: 'bg-parlor-600 hover:bg-parlor-500 text-white shadow-lg shadow-parlor-600/20',
+  secondary: 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300',
+  ghost: 'bg-transparent hover:bg-glass-white text-gray-500 hover:text-white',
+  danger: 'bg-red-600 hover:bg-red-500 text-white',
 };
 
-const sizeStyles: Record<ButtonSize, string> = {
-  sm: 'px-3 py-1.5 text-sm min-h-[32px]',
-  md: 'px-4 py-2 text-sm min-h-[38px]',
-  lg: 'px-6 py-2.5 text-base min-h-[44px]',
+const sizeClasses: Record<string, string> = {
+  sm: 'px-2.5 py-1.5 text-xs rounded-lg',
+  md: 'px-3 py-2 text-sm rounded-xl',
+  lg: 'px-4 py-2.5 text-base rounded-xl',
 };
 
-export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  (
-    {
-      variant = 'primary',
-      size = 'md',
-      isLoading = false,
-      leftIcon,
-      rightIcon,
-      children,
-      className = '',
-      disabled,
-      ...props
-    },
-    ref
-  ) => {
-    const isDisabled = disabled || isLoading;
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(({
+  variant = 'primary',
+  size = 'md',
+  isLoading,
+  disabled,
+  leftIcon,
+  rightIcon,
+  className = '',
+  children,
+  onClick,
+  to,
+  title,
+  type = 'button',
+}, ref) => {
+  const baseClasses = 'inline-flex items-center justify-center gap-2 font-medium transition-all duration-150 active:scale-95 select-none disabled:opacity-50 disabled:pointer-events-none focus:outline-none';
+  const allClasses = `${baseClasses} ${variantClasses[variant]} ${sizeClasses[size]} ${className}`;
 
+  const handleClick = (e: React.MouseEvent) => {
+    if (!disabled && !isLoading) playClickSound();
+    onClick?.(e);
+  };
+
+  const content = (
+    <>
+      {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : leftIcon}
+      {children && <span>{children}</span>}
+      {rightIcon}
+    </>
+  );
+
+  // 导航链接模式
+  if (to) {
     return (
-      <motion.button
-        ref={ref}
-        whileTap={{ scale: isDisabled ? 1 : 0.97 }}
-        className={`
-          inline-flex items-center justify-center gap-2 rounded-lg font-medium
-          transition-all duration-200
-          disabled:opacity-40 disabled:cursor-not-allowed
-          ${variantStyles[variant]}
-          ${sizeStyles[size]}
-          ${className}
-        `}
-        disabled={isDisabled}
-        {...props}
-      >
-        {isLoading ? (
-          <Loader2 className="w-4 h-4 animate-spin" />
-        ) : (
-          leftIcon
-        )}
-        {children}
-        {!isLoading && rightIcon}
-      </motion.button>
+      <Link to={to} className={allClasses} onClick={handleClick} title={title}>
+        {content}
+      </Link>
     );
   }
-);
+
+  // 普通按钮模式
+  return (
+    <button
+      ref={ref}
+      type={type}
+      className={allClasses}
+      onClick={handleClick}
+      disabled={disabled || isLoading}
+      title={title}
+    >
+      {content}
+    </button>
+  );
+});
 
 Button.displayName = 'Button';

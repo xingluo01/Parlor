@@ -1,47 +1,57 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { generateUUID } from '../utils/uuid';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  Send,
-  Loader2,
-  Square,
   Play,
   Brain,
   ChevronUp,
   ChevronDown,
-  NotebookPen,
-  Bookmark,
   X,
-  UserPen,
-  Plus,
   FileText,
+  Code,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { Button, Avatar, ConfirmDialog } from '../components/ui';
 import { MessageBubble, RpContent } from '../components/chat/MessageBubble';
 import { ParameterPanel } from '../components/chat/ParameterPanel';
 import { CharacterPanel } from '../components/chat/CharacterPanel';
+import { AuthorNotesPanel } from '../components/chat/AuthorNotesPanel';
 import { GreetingPickerModal } from '../components/chat/GreetingPickerModal';
+import { BookmarkPanel } from '../components/chat/BookmarkPanel';
 import { ConversationTree } from '../components/chat/ConversationTree';
-import { CommandPalette } from '../components/chat/CommandPalette';
 import { parseSlashCommand } from '../services/slashCommands';
 import type { SlashCommandContext } from '../services/slashCommands';
-import { characterOps, chatOps, connectionOps, presetOps, personaOps, settingsOps, worldInfoOps } from '../db';
+import { characterOps, chatOps, connectionOps, presetOps, personaOps, settingsOps, worldInfoOps, getCombinedAuthorNotePresets } from '../db';
 import { useChatStore, usePersonaStore } from '../stores';
 import { buildSystemPrompt } from '../services/api';
 import { useChatGeneration } from '../hooks/useChatGeneration';
 import { useHotkeys } from '../hooks/useHotkeys';
-import type { CharacterCard, ChatSession, Message, ConnectionProfile, Preset, Persona, AppSettings, ParameterOverrides, WorldInfo, QuickReply } from '../types';
+
+import type { CharacterCard, ChatSession, Message, ConnectionProfile, Preset, Persona, AppSettings, ParameterOverrides, WorldInfo, ChatCompletionRequest } from '../types';
 import { ChatPageHeader } from './ChatPageHeader';
+import { StatusPanel } from '../components/chat';
+import type { CharacterStatus } from '../components/chat/StatusPanel';
+import { ChatInput } from '../components/chat/ChatInput';
+import { extractStatusFromContent, stripStatusBlocks } from '../utils/prompts';
 
 export function ChatPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { id: chatId } = useParams();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const { activeChat, setActiveChat, updateChat, removeChat, streamingReasoning } = useChatStore();
-  const { personas, setPersonas } = usePersonaStore();
+const activeChat = useChatStore(s => s.activeChat);
+const setActiveChat = useChatStore(s => s.setActiveChat);
+const updateChat = useChatStore(s => s.updateChat);
+const removeChat = useChatStore(s => s.removeChat);
+const streamingReasoning = useChatStore(s => s.streamingReasoning);
+const clearStreamingReasoning = useChatStore(s => s.clearStreamingReasoning);
+const personas = usePersonaStore(s => s.personas);
+const setPersonas = usePersonaStore(s => s.setPersonas);
 
   const [character, setCharacter] = useState<CharacterCard | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -75,7 +85,7 @@ export function ChatPage() {
   // Author's Notes state
   const [showAuthorNotes, setShowAuthorNotes] = useState(false);
   const [authorNote, setAuthorNote] = useState('');
-  const [authorNoteDepth, setAuthorNoteDepth] = useState(2);
+  const [authorNoteDepth, setAuthorNoteDepth] = useState(0);
 
   // Greeting picker state
   const [showGreetingPicker, setShowGreetingPicker] = useState(false);
@@ -87,8 +97,11 @@ export function ChatPage() {
   // Bookmarks panel
   const [showBookmarks, setShowBookmarks] = useState(false);
 
-  // Mobile input actions menu
-  const [showMobileInputActions, setShowMobileInputActions] = useState(false);
+
+  // AI 提示词预览
+  const [showPromptModal, setShowPromptModal] = useState(false);
+  const [promptMessages, setPromptMessages] = useState<ChatCompletionRequest['messages'] | null>(null);
+  const [copied, setCopied] = useState(false);
 
   // Conversation tree
   const [showConversationTree, setShowConversationTree] = useState(false);
@@ -103,12 +116,24 @@ export function ChatPage() {
 
   // Visual Novel mode
 
+  // Character status panel state
+  const [characterStatuses, setCharacterStatuses] = useState<CharacterStatus[]>([]);
+  const [statusPage, setStatusPage] = useState(0);
+  const statusInfoRef = useRef<CharacterStatus | null>(null);
+  statusInfoRef.current = characterStatuses[0] ?? null;
+
+  // Reset status bar and reasoning when switching chats
+  useEffect(() => {
+    setCharacterStatuses([]);
+    setStatusPage(0);
+    clearStreamingReasoning();
+  }, [activeChat?.id]);
+
   // Close all dropdown menus
   const closeAllMenus = useCallback(() => {
     setShowPersonaMenu(false);
     setShowActionsMenu(false);
     setShowWorldInfoMenu(false);
-    setShowMobileInputActions(false);
   }, []);
 
   // Escape key closes all menus
@@ -132,6 +157,7 @@ export function ChatPage() {
     isImpersonating,
     regeneratingMessageId,
     streamingContent,
+    getLastPrompt,
   } = useChatGeneration({
     activeChat,
     character,
@@ -151,7 +177,7 @@ export function ChatPage() {
     regenerate: () => {
       if (!isGenerating && activeChat?.messages?.length) {
         const lastAssistant = [...activeChat.messages].reverse().find(m => m.role === 'assistant');
-        if (lastAssistant) regenerateResponse(lastAssistant.id);
+        if (lastAssistant) regenerateResponse(lastAssistant.id, statusInfoRef.current);
       }
     },
     stopGeneration: () => { if (isGenerating) stopGeneration(); },
@@ -184,8 +210,18 @@ export function ChatPage() {
       const chat = await chatOps.getById(chatId!);
       if (chat) {
         setActiveChat(chat);
-        setAuthorNote(chat.authorNote ?? '');
-        setAuthorNoteDepth(chat.authorNoteDepth ?? 2);
+        const note = chat.authorNote ?? '';
+        setAuthorNote(note);
+
+        // Auto-fill from enabled presets if authorNote is empty
+        if (!note) {
+          getCombinedAuthorNotePresets().then(combined => {
+            if (combined) {
+              setAuthorNote(combined);
+              chatOps.update(chat.id, { authorNote: combined }).catch(() => {});
+            }
+          }).catch(() => {});
+        }
 
         // Restore saved swipe indices
         const restored: Record<string, number> = {};
@@ -213,6 +249,10 @@ export function ChatPage() {
         setSettings(settingsData || null);
         setWorldInfoBooks(wiBooks);
         setPersonas(personaList);
+
+        // Set authorNote default depth from settings
+        const defaultDepth = settingsData?.authorNoteDefaultDepth ?? 0;
+        setAuthorNoteDepth(chat.authorNoteDepth ?? defaultDepth);
 
         // Load branch chats for conversation tree
         const allChats = await chatOps.getAll();
@@ -263,12 +303,12 @@ export function ChatPage() {
     }
   }, [isLoading, activeChat?.id]);
 
-  // Auto-scroll to bottom on new messages or when streaming starts/stops (not per-chunk)
+  // Auto-scroll to bottom on new messages, streaming content changes, or streaming start/stop
   useEffect(() => {
-    if (hasScrolledToBottom.current === activeChat?.id) {
+    if (hasScrolledToBottom.current === activeChat?.id && settings?.autoScroll) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [activeChat?.messages, isStreaming]);
+  }, [activeChat?.messages, isStreaming, streamingContent, settings?.autoScroll]);
 
   // Navigate swipes — persist activeSwipeIndex to the message
   const navigateSwipe = useCallback((messageId: string, direction: 'left' | 'right') => {
@@ -285,7 +325,13 @@ export function ChatPage() {
 
     // Persist to message so it survives page reload
     const updatedMessages = activeChat.messages.map(m =>
-      m.id === messageId ? { ...m, activeSwipeIndex: newIndex } : m
+      m.id === messageId
+        ? {
+            ...m,
+            activeSwipeIndex: newIndex,
+            content: m.swipes?.[newIndex] ?? m.content,
+          }
+        : m
     );
     updateChat(activeChat.id, { messages: updatedMessages });
     chatOps.update(activeChat.id, { messages: updatedMessages });
@@ -294,6 +340,8 @@ export function ChatPage() {
   // Auto-advance swipe index when a new swipe is added (after regeneration)
   const prevSwipeCounts = useRef<Record<string, number>>({});
   const initializedChatId = useRef<string | null>(null);
+  const extractedGreetingRef = useRef<string | null>(null);
+  const prevContentRef = useRef<string>('');
   useEffect(() => {
     if (!activeChat) return;
 
@@ -335,6 +383,113 @@ export function ChatPage() {
     }
   }, [activeChat?.messages]);
 
+  // Extract character status from assistant messages
+  useEffect(() => {
+    if (!activeChat?.messages) return;
+    const messages = activeChat.messages;
+
+    const tryExtractAndUpdate = (content: string) => {
+      if (!content || isStreaming || content === prevContentRef.current) return;
+      prevContentRef.current = content;
+      const { sceneHeader, infoLines, statusLines } = extractStatusFromContent(content, settings?.statusFieldConfig);
+      if (!sceneHeader && infoLines.length === 0 && statusLines.length === 0) return;
+
+      // 单聊始终替换第一个条目，不会创建多页
+      setCharacterStatuses(prev => {
+        const newStatus: CharacterStatus = { sceneHeader, infoLines, statusLines };
+        if (prev.length === 0) return [newStatus];
+
+        // 合并更新：本轮有输出时未提及的旧字段不保留，无输出时保留全部旧状态
+        const oldStatus = prev[0];
+
+        // 合并状态行：新值覆盖旧值；本轮有输出时未提及的旧字段不保留，无输出时保留全部旧状态
+        const newLabels = new Set((newStatus.statusLines || []).map(l => l.label));
+        const mergedLines = [...(newStatus.statusLines || [])];
+        const oldLines = oldStatus.statusLines || [];
+        for (const oldLine of oldLines) {
+          if (!newLabels.has(oldLine.label)) {
+            mergedLines.push(oldLine);
+          }
+        }
+
+        // 合并角色信息：新值覆盖旧值；本轮有输出时未提及的旧字段不保留，无输出时保留全部旧状态
+        const newInfoLabels = new Set((newStatus.infoLines || []).map(l => l.label));
+        const mergedInfo = [...(newStatus.infoLines || [])];
+        const oldInfo = oldStatus.infoLines || [];
+        for (const oldLine of oldInfo) {
+          if (!newInfoLabels.has(oldLine.label)) {
+            mergedInfo.push(oldLine);
+          }
+        }
+
+        return [{
+          sceneHeader: newStatus.sceneHeader || oldStatus.sceneHeader,
+          infoLines: mergedInfo,
+          statusLines: mergedLines,
+        }];
+      });
+      // Reset to first page when new status arrives
+      setStatusPage(0);
+    };
+
+    // 始终尝试从最后一条 assistant 消息提取状态
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg && lastMsg.role === 'assistant') {
+      tryExtractAndUpdate(lastMsg.content);
+    }
+
+    // 首次加载此聊天时，从第一条 assistant 消息（开场白）提取初始状态
+    if (extractedGreetingRef.current !== activeChat.id) {
+      extractedGreetingRef.current = activeChat.id;
+      const firstAssistant = messages.find(m => m.role === 'assistant');
+      if (firstAssistant && firstAssistant.id !== lastMsg?.id) {
+        tryExtractAndUpdate(firstAssistant.content);
+      }
+    }
+  }, [activeChat?.messages, activeChat?.id, settings?.statusFieldConfig]);
+
+  // 流式传输中实时提取状态
+  useEffect(() => {
+    if (isStreaming && streamingContent) {
+      const { sceneHeader, infoLines, statusLines } = extractStatusFromContent(
+        streamingContent,
+        settings?.statusFieldConfig,
+      );
+      if (sceneHeader || infoLines.length > 0 || statusLines.length > 0) {
+        setCharacterStatuses(prev => {
+          const newStatus: CharacterStatus = { sceneHeader, infoLines, statusLines };
+          if (prev.length === 0) return [newStatus];
+          const oldStatus = prev[0];
+
+          const newLabels = new Set((newStatus.statusLines || []).map(l => l.label));
+          const mergedLines = [...(newStatus.statusLines || [])];
+          const oldLines = oldStatus.statusLines || [];
+          for (const oldLine of oldLines) {
+            if (!newLabels.has(oldLine.label)) mergedLines.push(oldLine);
+          }
+
+          const newInfoLabels = new Set((newStatus.infoLines || []).map(l => l.label));
+          const mergedInfo = [...(newStatus.infoLines || [])];
+          const oldInfo = oldStatus.infoLines || [];
+          for (const oldLine of oldInfo) {
+            if (!newInfoLabels.has(oldLine.label)) mergedInfo.push(oldLine);
+          }
+
+          return [{
+            sceneHeader: newStatus.sceneHeader || oldStatus.sceneHeader,
+            infoLines: mergedInfo,
+            statusLines: mergedLines,
+          }];
+        });
+      }
+    }
+  }, [isStreaming, streamingContent, settings?.statusFieldConfig]);
+
+  // Regenerate wrapper that injects current status info
+  const handleRegenerateWithStatus = useCallback((id: string) => {
+    regenerateResponse(id, statusInfoRef.current);
+  }, [regenerateResponse]);
+
   // Send message (optional override for Quick Replies)
   const handleSend = async (overrideContent?: string) => {
     const content = overrideContent ?? inputValue;
@@ -346,7 +501,7 @@ export function ChatPage() {
       const lastAssistant = activeChat.messages.filter(m => m.role === 'assistant').at(-1);
       const ctx: SlashCommandContext = {
         onContinue: continueGeneration,
-        onRegenerate: (id) => regenerateResponse(id),
+        onRegenerate: handleRegenerateWithStatus,
         onImpersonate: () => impersonateResponse(undefined, (text) => { setInputValue(text); }),
         onSummarize: handleSummarize,
         onSetAuthorNote: (note) => { setAuthorNote(note); handleSaveAuthorNote(note, authorNoteDepth); },
@@ -370,22 +525,36 @@ export function ChatPage() {
     }
 
     setIsSending(true);
-    const userContent = content.trim();
-    setInputValue('');
+    try {
+      const userContent = content.trim();
+      setInputValue('');
 
-    const userMessage: Message = {
-      id: generateUUID(),
-      role: 'user',
-      content: userContent,
-      timestamp: Date.now(),
-    };
+      const userMessage: Message = {
+        id: generateUUID(),
+        role: 'user',
+        content: userContent,
+        timestamp: Date.now(),
+      };
 
-    const updatedMessages = [...activeChat.messages, userMessage];
-    await chatOps.update(activeChat.id, { messages: updatedMessages });
-    updateChat(activeChat.id, { messages: updatedMessages });
+      const updatedMessages = [...activeChat.messages, userMessage];
+      await chatOps.update(activeChat.id, { messages: updatedMessages });
+      updateChat(activeChat.id, { messages: updatedMessages });
 
-    await generateResponse(updatedMessages);
-    setIsSending(false);
+      await generateResponse(updatedMessages, statusInfoRef.current);
+    } catch (e) {
+      console.error('[ChatPage] Send failed:', e);
+      const errorMsg: Message = {
+        id: generateUUID(),
+        role: 'assistant',
+        content: `生成失败: ${e instanceof Error ? e.message : '未知错误'}`,
+        timestamp: Date.now(),
+      };
+      const updatedWithError = [...activeChat.messages, errorMsg];
+      await chatOps.update(activeChat.id, { messages: updatedWithError });
+      updateChat(activeChat.id, { messages: updatedWithError });
+    } finally {
+      setIsSending(false);
+    }
   };
 
   // Keep ref in sync for hotkeys
@@ -402,17 +571,6 @@ export function ChatPage() {
     }
   };
 
-  // Handle key press
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (showCommandPalette && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Escape')) {
-      // Let CommandPalette handle these keys when it's open
-      return;
-    }
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
 
   // Edit message
   const handleEditMessage = useCallback(async (messageId: string, content: string) => {
@@ -457,8 +615,8 @@ export function ChatPage() {
     updateChat(activeChat.id, { messages: messagesUpTo });
 
     // Trigger a new generation
-    await generateResponse(messagesUpTo);
-  }, [activeChat, updateChat, generateResponse]);
+    await generateResponse(messagesUpTo, statusInfoRef.current);
+  }, [activeChat, updateChat, generateResponse, statusInfoRef]);
 
   // Copy message
   const handleCopy = useCallback((content: string) => {
@@ -529,11 +687,19 @@ export function ChatPage() {
       const defaultPersona = personas.find(p => p.isDefault);
       if (defaultPersona) personaId = defaultPersona.id;
     }
+
+    // 获取所有启用了"默认关联"的世界书
+    const allWorldInfos = await worldInfoOps.getAll();
+    const enabledWorldInfoIds = allWorldInfos
+      .filter(b => b.enabled && b.autoAssociate !== false)
+      .map(b => b.id);
+
     const newChat: ChatSession = {
       id: generateUUID(),
       characterId: character.id,
       personaId,
       messages: [],
+      enabledWorldInfoIds: enabledWorldInfoIds.length > 0 ? enabledWorldInfoIds : [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -622,11 +788,29 @@ export function ChatPage() {
   // Estimated token count
   const estimatedTokens = useMemo(() => {
     if (!activeChat || !character) return 0;
-    const sysPrompt = preset ? buildSystemPrompt(character, persona, character.systemPrompt, preset) : '';
+    const sysPrompt = preset ? buildSystemPrompt(character, persona, character.systemPrompt, preset, settings?.responseLength) : '';
     const effectiveCtxSize = activeChat.parameterOverrides?.contextSize ?? contextSize;
     const msgText = activeChat.messages.slice(-effectiveCtxSize).map(m => m.content).join(' ');
     return Math.ceil((sysPrompt.length + msgText.length + inputValue.length) / 4);
   }, [activeChat?.messages, activeChat?.parameterOverrides?.contextSize, character, persona, preset, contextSize, inputValue]);
+
+  // Session aggregated metadata from responseMeta
+  const sessionMeta = useMemo(() => {
+    if (!activeChat?.messages) return null;
+    const msgs = activeChat.messages.filter(m => m.responseMeta);
+    if (msgs.length === 0) return null;
+    let totalTokens = 0;
+    let totalTimeMs = 0;
+    let currentTimeMs = 0;
+    msgs.forEach(m => {
+      if (m.responseMeta?.totalTokens) totalTokens += m.responseMeta.totalTokens;
+      if (m.responseMeta?.responseTimeMs) {
+        totalTimeMs += m.responseMeta.responseTimeMs;
+        currentTimeMs = m.responseMeta.responseTimeMs;
+      }
+    });
+    return { totalTokens, totalTimeMs, currentTimeMs, msgCount: msgs.length };
+  }, [activeChat?.messages]);
 
   if (isLoading) {
     return (
@@ -639,9 +823,9 @@ export function ChatPage() {
   if (!activeChat || !character) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-4">
-        <p className="text-gray-500">Chat not found</p>
+        <p className="text-gray-500">{t('chat.notFound')}</p>
         <Button className="mt-4" onClick={() => navigate('/chats')}>
-          Back to Chats
+          {t('chat.backToChats')}
         </Button>
       </div>
     );
@@ -653,6 +837,7 @@ export function ChatPage() {
       <ChatPageHeader
         character={character}
         activeChat={activeChat}
+        sessionMeta={sessionMeta}
         persona={persona}
         personas={personas}
         showPersonaMenu={showPersonaMenu}
@@ -686,7 +871,7 @@ export function ChatPage() {
             className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-400 hover:text-gray-300 transition-colors"
           >
             <FileText className="w-3.5 h-3.5 text-parlor-400" />
-            <span>Context Summary (up to message {activeChat.summaryUpToIndex ?? 0})</span>
+            <span>{t('chat.contextSummary', { count: activeChat.summaryUpToIndex ?? 0 })}</span>
             {showSummary ? <ChevronUp className="w-3 h-3 ml-auto" /> : <ChevronDown className="w-3 h-3 ml-auto" />}
           </button>
           {showSummary && (
@@ -699,6 +884,11 @@ export function ChatPage() {
         </div>
       )}
 
+      {/* Content + Status Panel Row */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Inner column: messages + controls */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-2 sm:p-3 space-y-2 sm:space-y-3">
         {activeChat.messages.map((message, idx) => {
@@ -710,12 +900,16 @@ export function ChatPage() {
               if (activeChat.messages[j].role === 'assistant') { isLastAssistant = false; break; }
             }
           }
+          // Strip status blocks from assistant messages for display
+          const displayMessage = message.role === 'assistant'
+            ? { ...message, content: stripStatusBlocks(message.content) }
+            : message;
           return (
           <div key={message.id} id={`msg-${message.id}`}>
             <MessageBubble
-              message={message}
+              message={displayMessage}
               character={character}
-              personaName={persona?.name || 'User'}
+              personaName={persona?.name || t('chat.role.user')}
               personaAvatar={persona?.avatar}
               isUser={message.role === 'user'}
               isLastAssistant={isLastAssistant}
@@ -728,13 +922,14 @@ export function ChatPage() {
               onEdit={handleEditMessage}
               onEditSwipe={handleEditSwipe}
               onDelete={handleDeleteMessage}
-              onRegenerate={regenerateResponse}
+              onRegenerate={handleRegenerateWithStatus}
               onCopy={handleCopy}
               onSwipe={navigateSwipe}
               onBookmark={handleBookmarkMessage}
               onBranch={handleBranchFromMessage}
               onRetry={handleRetry}
               ttsVoice={character.ttsVoice}
+
             />
           </div>
           );
@@ -749,7 +944,7 @@ export function ChatPage() {
           >
             <Avatar
               src={isImpersonating ? persona?.avatar : character.avatar}
-              name={isImpersonating ? (persona?.name || 'User') : character.name}
+              name={isImpersonating ? (persona?.name || t('chat.role.user')) : character.name}
               size={getAvatarSize()}
               className="flex-shrink-0 mt-1"
             />
@@ -761,7 +956,7 @@ export function ChatPage() {
                     className="flex items-center gap-2 text-xs text-parlor-400 hover:text-parlor-300 transition-colors mb-2"
                   >
                     <Brain className="w-3.5 h-3.5" />
-                    <span>Reasoning...</span>
+                    <span>{t('chat.reasoning')}</span>
                     <ChevronUp className={`w-3.5 h-3.5 transition-transform ${expandedStreamingReasoning ? '' : 'rotate-180'}`} />
                   </button>
                   {expandedStreamingReasoning && (
@@ -819,272 +1014,85 @@ export function ChatPage() {
               className="text-gray-400 hover:text-white"
             >
               <Play className="w-4 h-4" />
-              Continue Generation
+              {t('chat.continueGeneration')}
             </Button>
           </div>
         )}
       </div>
 
-      {/* Author's Notes Panel */}
-      <AnimatePresence>
-        {showAuthorNotes && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="overflow-hidden border-t border-glass-border bg-dark-100/80 backdrop-blur-sm"
-          >
-            <div className="max-w-4xl mx-auto px-3 py-2 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-gray-400">Author's Notes</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-500">Inject at depth:</span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={20}
-                    value={authorNoteDepth}
-                    onChange={(e) => {
-                      const d = Math.max(0, Math.min(20, parseInt(e.target.value) || 0));
-                      setAuthorNoteDepth(d);
-                      handleSaveAuthorNote(authorNote, d);
-                    }}
-                    className="w-12 text-center text-xs bg-dark-100 border border-glass-border rounded px-1 py-0.5 text-white focus:outline-none focus:border-parlor-500"
-                  />
-                  <span className="text-xs text-gray-500">msgs from end</span>
-                </div>
-              </div>
-              <textarea
-                value={authorNote}
-                onChange={(e) => setAuthorNote(e.target.value)}
-                onBlur={() => handleSaveAuthorNote(authorNote, authorNoteDepth)}
-                placeholder="Notes injected into the AI context at the specified depth..."
-                rows={3}
-                className="w-full resize-none rounded-lg bg-dark-100 border border-glass-border px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-parlor-500/50"
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <AuthorNotesPanel
+        isOpen={showAuthorNotes}
+        authorNote={authorNote}
+        authorNoteDepth={authorNoteDepth}
+        onSave={(note, depth) => {
+          setAuthorNote(note);
+          setAuthorNoteDepth(depth);
+          if (activeChat) {
+            chatOps.update(activeChat.id, { authorNote: note, authorNoteDepth: depth });
+          }
+        }}
+      />
 
-      {/* Quick Replies */}
-      {settings?.quickReplies && settings.quickReplies.length > 0 && !isGenerating && (
-        <div className="flex-shrink-0 border-t border-glass-border bg-dark-100/50 px-2 py-1.5">
-          <div className="flex gap-1.5 overflow-x-auto scrollbar-hide max-w-4xl mx-auto">
-            {settings.quickReplies.map((qr: QuickReply) => {
-              const resolved = qr.content
-                .replace(/\{\{char\}\}/gi, character?.name || '')
-                .replace(/\{\{user\}\}/gi, persona?.name || 'User');
-              return (
-                <button
-                  key={qr.id}
-                  onClick={() => {
-                    if (qr.action === 'send') {
-                      handleSend(resolved);
-                    } else {
-                      setInputValue(prev => prev + resolved);
-                      inputRef.current?.focus();
-                    }
-                  }}
-                  className="flex-shrink-0 px-3 py-1.5 text-xs rounded-full bg-dark-50 border border-glass-border text-gray-400 hover:text-white hover:border-parlor-500/20 transition-colors"
-                >
-                  {qr.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      <ChatInput
+        inputValue={inputValue}
+        onInputChange={handleInputChange}
+        onSend={handleSend}
+        onStop={stopGeneration}
+        onImpersonate={() => impersonateResponse(undefined, (text) => { setInputValue(text); setTimeout(() => inputRef.current?.focus(), 0); })}
+        onShowPromptPreview={() => {
+          const prompt = getLastPrompt?.();
+          if (prompt) {
+            setPromptMessages(prompt);
+            setShowPromptModal(true);
+          }
+        }}
+        isGenerating={isGenerating}
+        isSending={isSending}
+        authorNote={authorNote}
+        showAuthorNotes={showAuthorNotes}
+        onToggleAuthorNotes={() => setShowAuthorNotes(p => !p)}
+        showCommandPalette={showCommandPalette}
+        commandQuery={commandQuery}
+        onCommandQueryChange={setCommandQuery}
+        onCommandSelect={(cmd) => {
+          setInputValue(cmd + ' ');
+          setShowCommandPalette(false);
+          inputRef.current?.focus();
+        }}
+        onCloseCommandPalette={() => setShowCommandPalette(false)}
+        connection={connection}
+        preset={preset}
+        estimatedTokens={estimatedTokens}
+        totalTokens={settings?.contextSizeInTokens ?? 4096}
+        quickReplies={activeChat?.messages ? [] : (settings?.quickReplies ?? [])}
+        onQuickReply={(content) => handleSend(content)}
+        characterName={character?.name}
+        personaName={persona?.name}
+      />
+        </div> {/* End inner column */}
 
-      {/* Input Area */}
-      <div className="flex-shrink-0 border-t border-glass-border bg-dark-100/80 backdrop-blur-sm px-2 py-2 sm:p-3 safe-bottom">
-        <div className="flex gap-1.5 sm:gap-3 items-stretch max-w-4xl mx-auto">
-          <div className="flex-1 min-w-0 relative">
-            {showCommandPalette && (
-              <CommandPalette
-                query={commandQuery}
-                onSelect={(cmd) => {
-                  setInputValue(cmd + ' ');
-                  setShowCommandPalette(false);
-                  inputRef.current?.focus();
-                }}
-                onClose={() => setShowCommandPalette(false)}
-              />
-            )}
-            <textarea
-              ref={inputRef}
-              value={inputValue}
-              onChange={(e) => handleInputChange(e.target.value)}
-              onKeyDown={handleKeyPress}
-              placeholder="Type a message..."
-              className="w-full resize-none rounded-xl bg-dark-100 border border-glass-border px-3 py-2.5 sm:px-4 sm:py-3 text-white placeholder-gray-500 focus:outline-none focus:border-parlor-500/50 focus:ring-1 focus:ring-parlor-500/30 text-base leading-6 auto-grow-input"
-            />
-          </div>
-          {/* Author's Notes — desktop only */}
-          <button
-            onClick={() => setShowAuthorNotes(p => !p)}
-            title="Author's Notes"
-            className={`self-end h-12 w-12 p-0 rounded-xl hidden sm:flex items-center justify-center flex-shrink-0 border transition-colors ${
-              authorNote.trim()
-                ? 'bg-parlor-500/20 border-parlor-500/50 text-parlor-400'
-                : 'bg-dark-100 border-glass-border text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            <NotebookPen className="w-5 h-5" />
-          </button>
-          {/* Impersonate — desktop only */}
-          <button
-            onClick={() => impersonateResponse(undefined, (text) => { setInputValue(text); setTimeout(() => inputRef.current?.focus(), 0); })}
-            disabled={isGenerating || !connection || !preset}
-            title="Impersonate (AI writes as you)"
-            className="self-end h-12 w-12 p-0 rounded-xl hidden sm:flex items-center justify-center flex-shrink-0 border transition-colors bg-dark-100 border-glass-border text-gray-500 hover:text-gray-300 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <UserPen className="w-5 h-5" />
-          </button>
-          {/* Mobile-only + menu */}
-          <div className="relative self-end flex sm:hidden">
-            <button
-              onClick={() => setShowMobileInputActions(p => !p)}
-              title="More actions"
-              className="h-10 w-10 p-0 rounded-xl flex items-center justify-center flex-shrink-0 border transition-colors bg-dark-100 border-glass-border text-gray-500 hover:text-gray-300"
-            >
-              <Plus className="w-4.5 h-4.5" />
-            </button>
-            {showMobileInputActions && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setShowMobileInputActions(false)} />
-                <div className="absolute bottom-full mb-2 right-0 z-50 bg-dark-50 border border-glass-border rounded-xl shadow-xl py-1 min-w-[180px]">
-                  <button
-                    onClick={() => { setShowMobileInputActions(false); setShowAuthorNotes(p => !p); }}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-400 hover:bg-glass-white transition-colors"
-                  >
-                    <NotebookPen className="w-4 h-4 text-gray-400" />
-                    <span>Author's Notes</span>
-                    {authorNote.trim() && <span className="ml-auto w-2 h-2 rounded-full bg-parlor-500" />}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setShowMobileInputActions(false);
-                      impersonateResponse(undefined, (text) => { setInputValue(text); setTimeout(() => inputRef.current?.focus(), 0); });
-                    }}
-                    disabled={isGenerating || !connection || !preset}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-400 hover:bg-glass-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    <UserPen className="w-4 h-4 text-gray-400" />
-                    <span>Impersonate</span>
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-          {isGenerating ? (
-            <Button
-              onClick={stopGeneration}
-              variant="danger"
-              className="self-end h-10 w-10 sm:h-12 sm:w-12 p-0 rounded-xl flex items-center justify-center flex-shrink-0"
-            >
-              <Square className="w-5 h-5" />
-            </Button>
-          ) : (
-            <Button
-              onClick={() => handleSend()}
-              disabled={!inputValue.trim() || isSending}
-              className="self-end h-10 w-10 sm:h-12 sm:w-12 p-0 rounded-xl flex items-center justify-center flex-shrink-0"
-            >
-              {isSending ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <Send className="w-5 h-5" />
-              )}
-            </Button>
-          )}
-        </div>
-        <div className="hidden sm:flex justify-end mt-1 max-w-4xl mx-auto pr-1">
-          <span className="text-xs text-gray-600">
-            ~{estimatedTokens.toLocaleString()} / {(settings?.contextSizeInTokens ?? 4096).toLocaleString()} tokens
-          </span>
-        </div>
-      </div>
+        {/* Right Status Panel — always visible */}
+        <StatusPanel
+          statuses={characterStatuses}
+          currentPage={statusPage}
+          onPageChange={setStatusPage}
+          enablePagination={false}
+        />
+      </div> {/* End content + status panel row */}
 
-      {/* Bookmarks Panel */}
-      <AnimatePresence>
-        {showBookmarks && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowBookmarks(false)}
-              className="fixed inset-0 bg-black/50 z-50"
-            />
-            <motion.div
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="fixed right-0 top-0 bottom-0 w-full max-w-sm bg-dark-200 border-l border-glass-border z-50 flex flex-col"
-            >
-              <div className="sticky top-0 bg-dark-200/95 backdrop-blur-sm border-b border-glass-border p-4 flex items-center justify-between flex-shrink-0">
-                <div className="flex items-center gap-2">
-                  <Bookmark className="w-4 h-4 text-accent-500 fill-accent-500" />
-                  <h2 className="font-semibold text-white font-serif tracking-tight">
-                    Bookmarks
-                    {activeChat.messages.filter(m => m.bookmarked).length > 0 && (
-                      <span className="ml-2 text-sm font-normal text-gray-400">
-                        ({activeChat.messages.filter(m => m.bookmarked).length})
-                      </span>
-                    )}
-                  </h2>
-                </div>
-                <button onClick={() => setShowBookmarks(false)} className="p-1 rounded-lg hover:bg-glass-white transition-colors">
-                  <X className="w-5 h-5 text-gray-400" />
-                </button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                {activeChat.messages.filter(m => m.bookmarked).length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-center py-12">
-                    <Bookmark className="w-10 h-10 text-gray-600 mb-3" />
-                    <p className="text-gray-500 text-sm">No bookmarks yet</p>
-                    <p className="text-gray-600 text-xs mt-1">Hover a message and click the bookmark icon to save it here.</p>
-                  </div>
-                ) : (
-                  activeChat.messages
-                    .filter(m => m.bookmarked)
-                    .map(m => {
-                      const isUser = m.role === 'user';
-                      const speaker = isUser ? (persona?.name || 'User') : character.name;
-                      return (
-                        <button
-                          key={m.id}
-                          onClick={() => {
-                            setShowBookmarks(false);
-                            setTimeout(() => {
-                              document.getElementById(`msg-${m.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            }, 300);
-                          }}
-                          className="w-full text-left glass-sm p-3 rounded-xl hover:border-parlor-400/40 transition-colors"
-                        >
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className={`text-xs font-medium ${isUser ? 'text-parlor-400' : 'text-accent-500'}`}>
-                              {speaker}
-                            </span>
-                            <span className="text-xs text-gray-500">
-                              {new Date(m.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                              {' '}
-                              {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                          </div>
-                          <p className="text-sm text-gray-300 line-clamp-3">{m.content}</p>
-                        </button>
-                      );
-                    })
-                )}
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+      <BookmarkPanel
+        messages={activeChat.messages}
+        character={character}
+        persona={persona}
+        isOpen={showBookmarks}
+        onClose={() => setShowBookmarks(false)}
+        onNavigateToMessage={(messageId) => {
+          setShowBookmarks(false);
+          setTimeout(() => {
+            document.getElementById(`msg-${messageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, 300);
+        }}
+      />
 
       {/* Conversation Tree */}
       <AnimatePresence>
@@ -1112,9 +1120,9 @@ export function ChatPage() {
         isOpen={showDeleteDialog}
         onClose={() => setShowDeleteDialog(false)}
         onConfirm={handleDeleteChat}
-        title="Delete Chat"
-        message={`Are you sure you want to delete this chat with ${character.name}? All messages will be permanently deleted.`}
-        confirmText="Delete Chat"
+        title={t('chat.deleteChat')}
+        message={t('chat.deleteConfirmWithName', { name: character.name })}
+        confirmText={t('chat.deleteChat')}
         variant="danger"
       />
 
@@ -1172,6 +1180,66 @@ export function ChatPage() {
             setShowGreetingPicker(false);
           }}
         />
+      )}
+
+      {/* AI 提示词预览 */}
+      {showPromptModal && promptMessages && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowPromptModal(false)}>
+          <div className="relative w-full max-w-3xl max-h-[80vh] mx-4 bg-dark-200 border border-glass-border rounded-xl overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* 标题栏 */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-glass-border">
+              <div className="flex items-center gap-2">
+                <Code size={16} className="text-parlor-400" />
+                <span className="text-sm font-medium text-gray-200">AI 提示词预览</span>
+                <span className="text-[11px] text-gray-500">({promptMessages.length} 条消息)</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    const text = promptMessages.map(m => `<|${m.role}|>\n${typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2)}`).join('\n\n');
+                    navigator.clipboard.writeText(text);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }}
+                  className="p-1.5 rounded-lg hover:bg-dark-300 text-gray-400 hover:text-gray-200 transition-colors"
+                  title="复制全部"
+                >
+                  {copied ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
+                </button>
+                <button onClick={() => setShowPromptModal(false)} className="p-1.5 rounded-lg hover:bg-dark-300 text-gray-400 hover:text-gray-200 transition-colors">
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* 消息列表 */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {promptMessages.map((msg, i) => (
+                <div key={i} className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                      msg.role === 'system' ? 'bg-purple-500/20 text-purple-300' :
+                      msg.role === 'user' ? 'bg-blue-500/20 text-blue-300' :
+                      'bg-green-500/20 text-green-300'
+                    }`}>
+                      {msg.role.toUpperCase()}
+                    </span>
+                    <span className="text-[10px] text-gray-600">#{i + 1}</span>
+                  </div>
+                  <pre className="text-[11px] text-gray-300 bg-dark-300/50 rounded-lg p-3 whitespace-pre-wrap break-all font-mono leading-relaxed max-h-64 overflow-y-auto">
+                    {typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2)}
+                  </pre>
+                </div>
+              ))}
+            </div>
+
+            {/* 底部信息 */}
+            <div className="px-4 py-2 border-t border-glass-border text-[10px] text-gray-600 flex items-center justify-between">
+              <span>共 {promptMessages.length} 条消息</span>
+              <span>角色分配: {promptMessages.filter(m => m.role === 'system').length} system / {promptMessages.filter(m => m.role === 'user').length} user / {promptMessages.filter(m => m.role === 'assistant').length} assistant</span>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

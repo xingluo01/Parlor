@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { Sidebar, BottomNav, MobileHeader } from './Sidebar';
+import { Sidebar, TopNav } from './Sidebar';
 import { TopLoadingBar } from '../ui/TopLoadingBar';
 import { useUIStore } from '../../stores';
 import { settingsOps } from '../../db';
 import type { AppSettings } from '../../types';
 
 export function Layout() {
-  const { setIsMobile, isMobile } = useUIStore();
+  const setIsMobile = useUIStore(s => s.setIsMobile);
+  const isMobile = useUIStore(s => s.isMobile);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [navVisible, setNavVisible] = useState(true);
   const lastScrollY = useRef(0);
@@ -59,6 +60,8 @@ export function Layout() {
     return () => container.removeEventListener('scroll', handleScroll);
   }, [isMobile, settings?.autoHideMobileMenus]);
 
+  const fontSizeClass = settings?.fontSize === 'small' ? 'text-sm' : settings?.fontSize === 'large' ? 'text-lg' : 'text-base';
+
   const isChatPage = location.pathname.startsWith('/chat/');
   const hideMobileChrome = isMobile && isChatPage;
 
@@ -73,14 +76,14 @@ export function Layout() {
       <Sidebar />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className={`flex-1 flex flex-col overflow-hidden ${fontSizeClass}`}>
         {!hideMobileChrome && (
           <div
             className={`transition-transform duration-300 ease-in-out ${
-              shouldAutoHide && !showNav ? '-translate-y-12' : 'translate-y-0'
+              shouldAutoHide && !showNav ? '-translate-y-full' : 'translate-y-0'
             }`}
           >
-            <MobileHeader />
+            <TopNav />
           </div>
         )}
 
@@ -92,16 +95,6 @@ export function Layout() {
           <Outlet />
         </div>
 
-        {/* Mobile Bottom Navigation */}
-        {!hideMobileChrome && (
-          <div
-            className={`transition-transform duration-300 ease-in-out ${
-              shouldAutoHide && !showNav ? 'translate-y-full' : 'translate-y-0'
-            }`}
-          >
-            <BottomNav />
-          </div>
-        )}
       </main>
     </div>
   );

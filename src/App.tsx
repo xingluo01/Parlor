@@ -20,6 +20,9 @@ const LorebookPage = lazy(() => import('./pages/LorebookPage'));
 const GroupChatPage = lazy(() => import('./pages/GroupChatPage'));
 const GroupChatEditorPage = lazy(() => import('./pages/GroupChatEditorPage'));
 const DataBankPage = lazy(() => import('./pages/DataBankPage'));
+const CharacterMarketPage = lazy(() => import('./pages/CharacterMarketPage'));
+const ImageGeneratorPage = lazy(() => import('./pages/ImageGeneratorPage'));
+const NovelParserPage = lazy(() => import('./pages/NovelParserPage'));
 
 function RouteSpinner() {
   return (
@@ -79,6 +82,15 @@ function App() {
 
           {/* Data Bank */}
           <Route path="databank" element={<DataBankPage />} />
+
+          {/* Character Market */}
+          <Route path="markets" element={<CharacterMarketPage />} />
+
+          {/* Image Generator */}
+          <Route path="image-gen" element={<ImageGeneratorPage />} />
+
+          {/* Novel Parser */}
+          <Route path="novel-parser" element={<NovelParserPage />} />
 
           {/* Settings */}
           <Route path="settings" element={<SettingsPage />} />

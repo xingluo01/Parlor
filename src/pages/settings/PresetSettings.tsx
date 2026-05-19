@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { generateUUID } from '../../utils/uuid';
 import {
   Upload,
@@ -22,6 +23,7 @@ export function PresetSettings({
   presets: Preset[];
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPreset, setEditingPreset] = useState<Preset | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -49,7 +51,7 @@ export function PresetSettings({
       // Save to database
       await presetOps.add(preset);
       onRefresh();
-      setImportSuccess(`Successfully imported "${preset.name}" with ${preset.prompts?.length || 0} prompts`);
+      setImportSuccess(t('settings.presets.importedPresetCount', { name: preset.name, count: preset.prompts?.length || 0 }));
     } catch (error) {
       console.error('Preset import error:', error);
       setImportError(error instanceof Error ? error.message : 'Failed to import preset');
@@ -61,7 +63,7 @@ export function PresetSettings({
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-white font-serif tracking-tight">Generation Presets</h2>
+        <h2 className="text-lg font-semibold text-white font-serif tracking-tight">{t('settings.presets.title')}</h2>
         <div className="flex gap-2">
           <input
             ref={fileInputRef}
@@ -76,7 +78,7 @@ export function PresetSettings({
             onClick={() => fileInputRef.current?.click()}
           >
             <Upload className="w-4 h-4" />
-            Import
+            {t('common.import')}
           </Button>
           <Button
             size="sm"
@@ -86,7 +88,7 @@ export function PresetSettings({
             }}
           >
             <Plus className="w-4 h-4" />
-            New Preset
+            {t('settings.presets.newPreset')}
           </Button>
         </div>
       </div>
@@ -107,7 +109,7 @@ export function PresetSettings({
       )}
 
       <p className="text-gray-500 text-sm mb-4">
-        Presets control how the AI generates responses. Import SillyTavern presets or create your own.
+        {t('settings.presets.noPresetsDesc')}
       </p>
 
       <div className="space-y-3">
@@ -168,7 +170,7 @@ export function PresetSettings({
                       onRefresh();
                     }}
                   >
-                    Set Default
+                    {t('settings.presets.setDefault')}
                   </Button>
                 )}
                 <Button variant="ghost" size="sm" onClick={() => {
@@ -218,9 +220,9 @@ export function PresetSettings({
             setDeleteConfirm(null);
           }
         }}
-        title="Delete Preset"
-        message="Are you sure you want to delete this preset?"
-        confirmText="Delete"
+        title={t('settings.presets.deletePreset')}
+        message={t('settings.presets.deletePresetConfirm')}
+        confirmText={t('common.delete')}
         variant="danger"
       />
     </div>
@@ -239,6 +241,7 @@ export function PresetModal({
   preset: Preset | null;
   onSave: (data: Partial<Preset>) => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [temperature, setTemperature] = useState(0.8);
   const [topP, setTopP] = useState(0.9);
@@ -250,7 +253,6 @@ export function PresetModal({
   const [stopSequences, setStopSequences] = useState('');
   const [reasoningMode, setReasoningMode] = useState<ReasoningMode | undefined>(undefined);
   const [reasoningBudgetTokens, setReasoningBudgetTokens] = useState<number>(8192);
-  const [reasoningEffort, setReasoningEffort] = useState<'low' | 'medium' | 'high' | undefined>(undefined);
   const [postPromptProcessing, setPostPromptProcessing] = useState<PostPromptProcessing>('none');
   const [isLoading, setIsLoading] = useState(false);
   const [prompts, setPrompts] = useState<Preset['prompts']>([]);
@@ -281,7 +283,6 @@ export function PresetModal({
       setStopSequences(preset.stopSequences?.join(', ') || '');
       setReasoningMode(preset.reasoningMode);
       setReasoningBudgetTokens(preset.reasoningBudgetTokens ?? 8192);
-      setReasoningEffort(preset.reasoningEffort);
       setPostPromptProcessing(preset.post_prompt_processing || 'none');
       setPrompts(preset.prompts || []);
       setPromptOrder(preset.prompt_order || []);
@@ -339,8 +340,7 @@ export function PresetModal({
         maxTokens,
         stopSequences: stopSequences.split(',').map(s => s.trim()).filter(Boolean),
         reasoningMode,
-        reasoningBudgetTokens: reasoningMode === 'anthropic' ? reasoningBudgetTokens : undefined,
-        reasoningEffort: reasoningMode === 'openai' ? reasoningEffort : undefined,
+        reasoningBudgetTokens: reasoningMode === 'deepseek' ? reasoningBudgetTokens : undefined,
         post_prompt_processing: postPromptProcessing,
         isDefault: preset?.isDefault || false,
         prompts: prompts && prompts.length > 0 ? prompts : undefined,
@@ -381,15 +381,15 @@ export function PresetModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={preset ? 'Edit Preset' : 'New Preset'}
+      title={preset ? t('settings.presets.editPreset') : t('settings.presets.newPreset')}
       size="xl"
     >
       <div className="space-y-4">
         <Input
-          label="Preset Name"
+          label={t('settings.presets.presetName')}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Creative, Precise, etc."
+          placeholder={t('settings.presets.presetNamePlaceholder')}
         />
 
         {/* Tab Switcher */}
@@ -630,10 +630,7 @@ export function PresetModal({
                 {([
                   { value: 'none', label: 'Off' },
                   { value: 'auto', label: 'Auto' },
-                  { value: 'openai', label: 'OpenAI' },
-                  { value: 'anthropic', label: 'Anthropic' },
                   { value: 'deepseek', label: 'DeepSeek' },
-                  { value: 'glm', label: 'GLM' },
                 ] as const).map((option) => (
                   <button
                     key={option.value}
@@ -649,7 +646,7 @@ export function PresetModal({
                   </button>
                 ))}
               </div>
-              {reasoningMode === 'anthropic' && (
+              {reasoningMode === 'deepseek' && (
                 <div className="mt-3 space-y-1">
                   <PresetSlider
                     label="Thinking Budget (tokens)"
@@ -661,30 +658,6 @@ export function PresetModal({
                   />
                   <p className="text-xs text-gray-500">
                     Higher budget = deeper reasoning but slower and more expensive.
-                  </p>
-                </div>
-              )}
-              {reasoningMode === 'openai' && (
-                <div className="mt-3">
-                  <label className="block text-xs font-medium text-gray-400 mb-2">Reasoning Effort</label>
-                  <div className="flex gap-2">
-                    {([undefined, 'low', 'medium', 'high'] as const).map((effort) => (
-                      <button
-                        key={effort ?? 'auto'}
-                        type="button"
-                        onClick={() => setReasoningEffort(effort)}
-                        className={`flex-1 py-1.5 px-2 rounded-lg text-xs transition-colors ${
-                          reasoningEffort === effort
-                            ? 'bg-parlor-500 text-white'
-                            : 'bg-dark-100 border border-glass-border text-gray-400 hover:text-white'
-                        }`}
-                      >
-                        {effort === undefined ? 'Auto' : effort.charAt(0).toUpperCase() + effort.slice(1)}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Controls reasoning depth for o-series models. Auto lets the model decide.
                   </p>
                 </div>
               )}
@@ -732,10 +705,10 @@ export function PresetModal({
 
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button onClick={handleSave} isLoading={isLoading} disabled={!name.trim()}>
-            {preset ? 'Save Changes' : 'Create Preset'}
+            {preset ? t('common.save') : t('settings.presets.createPreset')}
           </Button>
         </div>
       </div>

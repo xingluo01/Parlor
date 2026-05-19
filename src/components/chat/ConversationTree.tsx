@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
 import { X, GitBranch, Bookmark, ChevronRight } from 'lucide-react';
 import type { ChatSession, Message } from '../../types';
 
@@ -46,6 +47,7 @@ export function ConversationTree({
   onNavigateBranch,
   onClose,
 }: ConversationTreeProps) {
+  const { t } = useTranslation();
   const lastMessageId = chat.messages.length > 0 ? chat.messages[chat.messages.length - 1].id : null;
 
   // Build a map from branchPointMessageId -> branches that fork from that message
@@ -88,9 +90,9 @@ export function ConversationTree({
           <div className="flex items-center gap-2">
             <GitBranch className="w-4 h-4 text-parlor-400" />
             <h2 className="font-semibold text-white font-serif tracking-tight">
-              Conversation Tree
+              {t('chat.conversationTree.title')}
               <span className="ml-2 text-sm font-normal text-gray-500 font-sans">
-                ({chat.messages.length} messages)
+                {t('chat.conversationTree.messagesCount', { count: chat.messages.length })}
               </span>
             </h2>
           </div>
@@ -107,9 +109,9 @@ export function ConversationTree({
           {chat.messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center py-12">
               <GitBranch className="w-10 h-10 text-gray-600 mb-3" />
-              <p className="text-gray-500 text-sm">No messages yet</p>
+              <p className="text-gray-500 text-sm">{t('chat.conversationTree.noMessages')}</p>
               <p className="text-gray-600 text-xs mt-1">
-                Start a conversation to see the tree here.
+                {t('chat.conversationTree.startHint')}
               </p>
             </div>
           ) : (
@@ -155,14 +157,14 @@ export function ConversationTree({
                                 : 'text-gray-400'
                             }`}
                           >
-                            {msg.role}
+                            {t(`chat.role.${msg.role}`)}
                           </span>
                           <span className="text-xs text-gray-500">
                             {formatCompactTimestamp(msg.timestamp)}
                           </span>
                           {hasSwipes && (
                             <span className="text-2xs text-gray-500 bg-dark-200 px-1.5 py-0.5 rounded">
-                              ({msg.swipes!.length} swipes)
+                              {t('chat.conversationTree.swipesCount', { count: msg.swipes!.length })}
                             </span>
                           )}
                           {msg.bookmarked && (
@@ -190,10 +192,10 @@ export function ConversationTree({
                           >
                             <GitBranch className="w-3.5 h-3.5 text-parlor-400 flex-shrink-0" />
                             <span className="text-xs text-parlor-400 font-medium truncate">
-                              {branch.title || 'Untitled branch'}
+                              {branch.title || t('chat.conversationTree.untitledBranch')}
                             </span>
                             <span className="text-xs text-gray-500">
-                              ({branch.messages.length} msgs)
+                              {t('chat.conversationTree.msgsCount', { count: branch.messages.length })}
                             </span>
                             <ChevronRight className="w-3 h-3 text-gray-500 group-hover:text-parlor-400 transition-colors flex-shrink-0" />
                           </button>

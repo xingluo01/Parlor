@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { X, Send } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { detectExpression } from '../../services/expressionDetector';
@@ -37,6 +38,7 @@ export function VNMode({
   onExit,
   chatBackground,
 }: VNModeProps) {
+  const { t } = useTranslation();
   const [displayedText, setDisplayedText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const typewriterRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -212,7 +214,7 @@ export function VNMode({
               value={inputValue}
               onChange={(e) => onInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Type your response..."
+              placeholder={t('chat.vnModePlaceholder')}
               className="flex-1 bg-dark-100/60 border border-glass-border rounded-lg px-4 py-2 text-white placeholder-white/30 focus:outline-none focus:border-parlor-500/50"
               autoFocus
             />
@@ -234,7 +236,7 @@ export function VNMode({
               <span className="w-1.5 h-1.5 rounded-full bg-parlor-500 animate-bounce" style={{ animationDelay: '150ms' }} />
               <span className="w-1.5 h-1.5 rounded-full bg-parlor-500 animate-bounce" style={{ animationDelay: '300ms' }} />
             </div>
-            <span>{character.name} is typing...</span>
+            <span>{t('chat.isTyping', { character: character.name })}</span>
           </div>
         )}
       </div>

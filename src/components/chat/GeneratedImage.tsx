@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { X, Maximize2 } from 'lucide-react';
 
 type GeneratedImageProps = {
@@ -6,7 +7,9 @@ type GeneratedImageProps = {
   alt?: string;
 };
 
-export function GeneratedImage({ src, alt = 'Generated image' }: GeneratedImageProps) {
+export function GeneratedImage({ src, alt: altProp }: GeneratedImageProps) {
+  const { t } = useTranslation();
+  const alt = altProp || t('chat.generatedImageAlt');
   const [expanded, setExpanded] = useState(false);
 
   return (

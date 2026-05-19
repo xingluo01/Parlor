@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { generateUUID } from '../utils/uuid';
 import { motion } from 'framer-motion';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -19,8 +20,10 @@ import { useCharacterStore, useChatStore } from '../stores';
 import { exportCharacterToJson, exportCharacterToPng } from '../utils/characterImport';
 import type { CharacterCard, ChatSession } from '../types';
 import { saveAs } from 'file-saver';
+import { sanitizeFilename } from '../utils/fileExport';
 
 export function CharacterDetailPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { id } = useParams();
   const { removeCharacter } = useCharacterStore();
@@ -86,14 +89,14 @@ export function CharacterDetailPage() {
     if (!character) return;
     const json = exportCharacterToJson(character);
     const blob = new Blob([json], { type: 'application/json' });
-    saveAs(blob, `${character.name.replace(/[^a-z0-9]/gi, '_')}.json`);
+    saveAs(blob, `${sanitizeFilename(character.name)}.json`);
   };
 
   const handleExportPng = async () => {
     if (!character) return;
     try {
       const blob = await exportCharacterToPng(character);
-      saveAs(blob, `${character.name.replace(/[^a-z0-9]/gi, '_')}.png`);
+      saveAs(blob, `${sanitizeFilename(character.name)}.png`);
     } catch (err) {
       console.error('Failed to export PNG:', err);
     }
@@ -129,18 +132,18 @@ export function CharacterDetailPage() {
   if (!character) {
     return (
       <div className="p-4 md:p-6 text-center">
-        <p className="text-gray-500">Character not found</p>
+        <p className="text-gray-500">{t('characterDetail.notFound')}</p>
         <Button className="mt-4" onClick={() => navigate('/characters')}>
-          Back to Characters
+          {t('characterDetail.backToCharacters')}
         </Button>
       </div>
     );
   }
 
   const sections = [
-    { id: 'description' as const, label: 'Description', icon: FileText },
-    { id: 'scenario' as const, label: 'Scenario', icon: Tag },
-    { id: 'greetings' as const, label: 'Greetings', icon: MessageSquare },
+    { id: 'description' as const, label: t('characterDetail.description'), icon: FileText },
+    { id: 'scenario' as const, label: t('characterDetail.scenario'), icon: Tag },
+    { id: 'greetings' as const, label: t('characterDetail.greetings'), icon: MessageSquare },
   ];
 
   return (
@@ -165,7 +168,7 @@ export function CharacterDetailPage() {
                 {formatDate(character.createdAt)}
               </span>
               {chats.length > 0 && (
-                <span>{chats.length} chat{chats.length !== 1 ? 's' : ''}</span>
+                <span>                {t('characterDetail.chatsCount', { count: chats.length })}</span>
               )}
             </div>
           </div>
@@ -173,19 +176,19 @@ export function CharacterDetailPage() {
         <div className="flex flex-wrap gap-2">
           <Button onClick={handleStartChat}>
             <MessageSquare className="w-4 h-4" />
-            Start Chat
+            {t('characterDetail.startChat')}
           </Button>
           <Button variant="secondary" onClick={() => navigate(`/characters/${id}/edit`)}>
             <Edit className="w-4 h-4" />
-            Edit
+            {t('characterDetail.edit')}
           </Button>
           <Button variant="secondary" onClick={handleExport}>
             <Download className="w-4 h-4" />
-            Export
+            {t('characterDetail.export')}
           </Button>
           <Button variant="secondary" onClick={handleExportPng}>
             <Image className="w-4 h-4" />
-            Export PNG
+            {t('characterDetail.exportPng')}
           </Button>
         </div>
       </div>
@@ -232,26 +235,26 @@ export function CharacterDetailPage() {
       >
         {activeSection === 'description' && (
           <div>
-            <h3 className="text-lg font-medium text-white mb-3 font-serif">Description</h3>
+            <h3 className="text-lg font-medium text-white mb-3 font-serif">{t('characterDetail.description')}</h3>
             {character.description ? (
               <p className="text-gray-400 whitespace-pre-wrap leading-relaxed">
                 {character.description}
               </p>
             ) : (
-              <p className="text-gray-600 italic">No description provided</p>
+              <p className="text-gray-600 italic">{t('characterDetail.noDescription')}</p>
             )}
           </div>
         )}
 
         {activeSection === 'scenario' && (
           <div>
-            <h3 className="text-lg font-medium text-white mb-3 font-serif">Scenario</h3>
+            <h3 className="text-lg font-medium text-white mb-3 font-serif">{t('characterDetail.scenario')}</h3>
             {character.scenario ? (
               <p className="text-gray-400 whitespace-pre-wrap leading-relaxed">
                 {character.scenario}
               </p>
             ) : (
-              <p className="text-gray-600 italic">No scenario defined</p>
+              <p className="text-gray-600 italic">{t('characterDetail.noScenario')}</p>
             )}
           </div>
         )}
@@ -259,20 +262,20 @@ export function CharacterDetailPage() {
         {activeSection === 'greetings' && (
           <div className="space-y-4">
             <div>
-              <h4 className="text-sm font-medium text-gray-500 mb-2">First Message</h4>
+              <h4 className="text-sm font-medium text-gray-500 mb-2">{t('characterDetail.firstMessage')}</h4>
               {character.firstMessage ? (
                 <div className="glass-sm p-4 text-gray-400 whitespace-pre-wrap">
                   {character.firstMessage}
                 </div>
               ) : (
-                <p className="text-gray-600 italic">No first message defined</p>
+                <p className="text-gray-600 italic">{t('characterDetail.noFirstMessage')}</p>
               )}
             </div>
 
             {character.alternateGreetings && character.alternateGreetings.length > 0 && (
               <div>
                 <h4 className="text-sm font-medium text-gray-500 mb-2">
-                  Alternate Greetings ({character.alternateGreetings.length})
+                  {t('characterDetail.alternateGreetings', { count: character.alternateGreetings.length })}
                 </h4>
                 <div className="space-y-3">
                   {character.alternateGreetings.map((greeting, index) => (
@@ -292,9 +295,9 @@ export function CharacterDetailPage() {
         <div className="glass p-6 mt-4">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-medium text-white font-serif">Lorebook</h3>
+              <h3 className="text-lg font-medium text-white font-serif">{t('characterDetail.lorebook')}</h3>
               <p className="text-sm text-gray-500">
-                {character.characterBook.entries.filter(e => e.enabled).length} active entries
+                {t('characterDetail.activeEntries', { count: character.characterBook.entries.filter(e => e.enabled).length })}
               </p>
             </div>
             <Button
@@ -302,7 +305,7 @@ export function CharacterDetailPage() {
               onClick={() => navigate(`/characters/${id}/edit`)}
             >
               <Edit className="w-4 h-4" />
-              Edit Lorebook
+              {t('characterDetail.editLorebook')}
             </Button>
           </div>
         </div>
@@ -311,7 +314,7 @@ export function CharacterDetailPage() {
       {/* Recent Chats */}
       {chats.length > 0 && (
         <div className="glass p-6 mt-4">
-          <h3 className="text-lg font-medium text-white mb-4 font-serif">Recent Chats</h3>
+          <h3 className="text-lg font-medium text-white mb-4 font-serif">{t('characterDetail.recentChats')}</h3>
           <div className="space-y-2">
             {chats.slice(0, 5).map((chat) => (
               <div
@@ -322,10 +325,10 @@ export function CharacterDetailPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="font-medium text-white text-sm">
-                      {chat.title || `Chat with ${character.name}`}
+                      {chat.title || t('characterDetail.chatWith', { name: character.name })}
                     </p>
                     <p className="text-sm text-gray-500">
-                      {chat.messages.length} messages • Updated {formatDate(chat.updatedAt)}
+                      {t('characterDetail.messagesCount', { count: chat.messages.length })} • Updated {formatDate(chat.updatedAt)}
                     </p>
                   </div>
                   <MessageSquare className="w-4 h-4 text-gray-600" />
@@ -338,13 +341,13 @@ export function CharacterDetailPage() {
 
       {/* Danger Zone */}
       <div className="glass p-6 mt-4 border-red-500/15">
-        <h3 className="text-lg font-medium text-red-400 mb-2 font-serif">Danger Zone</h3>
+        <h3 className="text-lg font-medium text-red-400 mb-2 font-serif">{t('characterDetail.dangerZone')}</h3>
         <p className="text-sm text-gray-500 mb-4">
-          Deleting this character will also delete all associated chats.
+          {t('characterDetail.deleteWarning')}
         </p>
         <Button variant="danger" onClick={() => setShowDeleteConfirm(true)}>
           <Trash2 className="w-4 h-4" />
-          Delete Character
+          {t('characterDetail.deleteCharacter')}
         </Button>
       </div>
 
@@ -353,9 +356,9 @@ export function CharacterDetailPage() {
         isOpen={showDeleteConfirm}
         onClose={() => setShowDeleteConfirm(false)}
         onConfirm={handleDelete}
-        title="Delete Character"
-        message={`Are you sure you want to delete "${character.name}"? This will also delete ${chats.length} associated chat${chats.length !== 1 ? 's' : ''}. This action cannot be undone.`}
-        confirmText="Delete"
+        title={t('characterDetail.deleteCharacter')}
+        message={t('characterDetail.deleteConfirm', { name: character.name, count: chats.length })}
+        confirmText={t('common.delete')}
         variant="danger"
       />
     </div>

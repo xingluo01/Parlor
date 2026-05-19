@@ -1,2 +1,2 @@
 export { Layout } from './Layout';
-export { Sidebar, BottomNav, MobileHeader } from './Sidebar';
+export { Sidebar, TopNav, MobileHeader } from './Sidebar';

@@ -4,8 +4,11 @@ import { APIClient, buildSystemPrompt, buildMessages, buildDepthInjections } fro
 import type { DepthInjection } from '../utils/presetImport';
 import { chatOps, regexOps, worldInfoOps } from '../db';
 import { useChatStore } from '../stores';
-import type { CharacterCard, ChatSession, Message, ConnectionProfile, Preset, Persona, AppSettings, RegexScript } from '../types';
+import type { CharacterCard, ChatSession, Message, ConnectionProfile, Preset, Persona, AppSettings, RegexScript, ChatCompletionRequest } from '../types';
+import { CONTINUE_INSTRUCTION } from '../utils/prompts';
 import { storeEmbedding, searchSimilar } from '../services/vectorStore';
+import { getCombinedAuthorNotePresets } from '../services/apiClient';
+import type { CharacterStatus } from '../components/chat/StatusPanel';
 
 function applyRegexScripts(text: string, scripts: RegexScript[], target: 'input' | 'output'): string {
   return scripts
@@ -34,16 +37,69 @@ async function buildApiRequest(
   messages: Message[],
   vectorEnabled?: boolean,
   translateLanguage?: string,
+  responseLength?: 'short' | 'medium' | 'long',
+  statusInfo?: CharacterStatus | null,
 ) {
-  const systemPrompt = buildSystemPrompt(character, persona, character.systemPrompt, preset);
+  const systemPrompt = buildSystemPrompt(character, persona, character.systemPrompt, preset, responseLength);
+
+  // ---- 关联角色信息注入 ----
+  let relatedCharactersText = '';
+  if (character.relations?.length) {
+    try {
+      const priority: Record<string, number> = {
+        '情侣': 0, '家人': 1, '好友': 2, '师徒': 3,
+        '师生': 4, '主仆': 5, '同门': 6, '敌对': 7, '其他': 8
+      };
+      const topRelations = [...character.relations]
+        .sort((a, b) => (priority[a.relationType] ?? 9) - (priority[b.relationType] ?? 9))
+        .slice(0, 3);
+
+      if (topRelations.length > 0) {
+        const relatedCards = await Promise.all(
+          topRelations.map(rel =>
+            fetch(`/api/characters/${rel.targetId}`)
+              .then(r => r.ok ? r.json() : null)
+              .catch(() => null)
+          )
+        );
+
+        const infoParts: string[] = [];
+        for (let i = 0; i < topRelations.length; i++) {
+          const card = relatedCards[i];
+          if (!card) continue;
+          const rel = topRelations[i];
+          infoParts.push(
+            `【${card.name}】关系：${rel.relationType}${rel.summary ? `（${rel.summary}）` : ''}\n` +
+            `  描述：${(card.description || '无').slice(0, 200)}`
+          );
+        }
+
+        if (infoParts.length > 0) {
+          relatedCharactersText = '\n\n## 相关角色信息\n你和以下角色存在关联关系，在对话中请注意这些关系，适时提及：\n' + infoParts.join('\n\n');
+        }
+      }
+    } catch (e) {
+      console.debug('[RelationInject] Failed to load related characters:', e);
+    }
+  }
+
   const presetInjections = buildDepthInjections(character, persona, character.systemPrompt, preset);
   const allDepthInjections: DepthInjection[] = [...presetInjections];
 
-  if (activeChat.authorNote?.trim()) {
+  // 获取作者备注内容：优先使用 chat 的设置，其次 fallback 到启用的预设组合
+  let authorNoteContent = activeChat.authorNote?.trim();
+  if (!authorNoteContent) {
+    try {
+      authorNoteContent = await getCombinedAuthorNotePresets();
+    } catch {
+      // 静默失败
+    }
+  }
+  if (authorNoteContent) {
     allDepthInjections.push({
-      content: activeChat.authorNote,
+      content: `[CRITICAL INSTRUCTION — You MUST follow this]\n${authorNoteContent}`,
       role: 'system',
-      depth: activeChat.authorNoteDepth ?? 2,
+      depth: 0,
     });
   }
   allDepthInjections.sort((a, b) => b.depth - a.depth);
@@ -77,7 +133,7 @@ async function buildApiRequest(
     ? [activeChat.summary, `[Relevant context from earlier]\n${vectorContext}`].filter(Boolean).join('\n\n')
     : activeChat.summary;
 
-  const apiMessages = buildMessages(systemPrompt, messages, contextSize, allLorebookEntries, allDepthInjections, effectiveSummary, preset.wi_format);
+  const apiMessages = buildMessages(systemPrompt + relatedCharactersText, messages, contextSize, allLorebookEntries, allDepthInjections, effectiveSummary, preset.wi_format);
 
   const enabledScripts = await regexOps.getEnabled();
 
@@ -101,6 +157,31 @@ async function buildApiRequest(
     });
   }
 
+
+
+  // 状态约束：嵌入最后一条 user 消息末尾（对 DeepSeek 效果远好于 system 消息注入）
+  if (statusInfo && lastUserIdx !== -1) {
+    const blockParts: string[] = [];
+    const scenes: string[] = [];
+    if (statusInfo.sceneHeader) scenes.push(statusInfo.sceneHeader);
+    if (statusInfo.infoLines.length > 0) {
+      blockParts.push(statusInfo.infoLines.map(l => `${l.label}: ${l.value}`).join('\n'));
+    }
+    if (statusInfo.statusLines.length > 0) {
+      blockParts.push(statusInfo.statusLines.map(l => `${l.label}: ${l.value}`).join('\n'));
+    }
+    const statusBlock = blockParts.length > 0
+      ? `${scenes.length > 0 ? scenes.join(' | ') + '\n' : ''}${blockParts.join('\n')}`
+      : (scenes.length > 0 ? scenes.join(' | ') : '');
+    if (statusBlock) {
+      apiMessages[lastUserIdx] = {
+        ...apiMessages[lastUserIdx],
+        content: apiMessages[lastUserIdx].content +
+          `\n\n[STATUS REFERENCE — Current known state]\n${statusBlock}\n` +
+          `[END STATUS — You MUST output an updated [STATUS] block at the end of your response reflecting the new state after this exchange]`,
+      };
+    }
+  }
   return { apiMessages, enabledScripts };
 }
 
@@ -123,10 +204,23 @@ export function useChatGeneration({
   settings,
   contextSize,
 }: UseChatGenerationOptions) {
-  const { updateChat, isStreaming, setIsStreaming, isImpersonating, setIsImpersonating, regeneratingMessageId, setRegeneratingMessageId, streamingContent, appendStreamingContent, clearStreamingContent, streamingReasoning, appendStreamingReasoning, clearStreamingReasoning } = useChatStore();
+  const updateChat = useChatStore(s => s.updateChat);
+  const isStreaming = useChatStore(s => s.isStreaming);
+  const setIsStreaming = useChatStore(s => s.setIsStreaming);
+  const isImpersonating = useChatStore(s => s.isImpersonating);
+  const setIsImpersonating = useChatStore(s => s.setIsImpersonating);
+  const regeneratingMessageId = useChatStore(s => s.regeneratingMessageId);
+  const setRegeneratingMessageId = useChatStore(s => s.setRegeneratingMessageId);
+  const streamingContent = useChatStore(s => s.streamingContent);
+  const appendStreamingContent = useChatStore(s => s.appendStreamingContent);
+  const clearStreamingContent = useChatStore(s => s.clearStreamingContent);
+  const streamingReasoning = useChatStore(s => s.streamingReasoning);
+  const appendStreamingReasoning = useChatStore(s => s.appendStreamingReasoning);
+  const clearStreamingReasoning = useChatStore(s => s.clearStreamingReasoning);
   const apiClientRef = useRef<APIClient | null>(null);
   const continueRef = useRef<() => void>(() => {});
   const impersonateCallbackRef = useRef<((text: string) => void) | null>(null);
+  const lastPromptRef = useRef<ChatCompletionRequest['messages'] | null>(null);
 
   // Get effective preset with parameter overrides applied
   const getEffectivePreset = useCallback(() => {
@@ -176,7 +270,7 @@ export function useChatGeneration({
     }
   }, [connection, preset, updateChat]);
 
-  const generateResponse = useCallback(async (messages: Message[]) => {
+  const generateResponse = useCallback(async (messages: Message[], statusInfo?: CharacterStatus | null) => {
     if (!connection || !preset || !character || !activeChat) return;
 
     // Abort any in-progress generation before starting a new one
@@ -195,15 +289,134 @@ export function useChatGeneration({
 
     const chatId = activeChat.id;
     const { apiMessages, enabledScripts } = await buildApiRequest(
-      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, messages, settings?.vectorStoreEnabled, settings?.translateLanguage,
+      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, messages, settings?.vectorStoreEnabled, settings?.translateLanguage, settings?.responseLength, statusInfo,
     );
 
+    lastPromptRef.current = apiMessages;
+
+    const startTime = Date.now();
     try {
-      await client.streamCompletion(
-        apiMessages,
-        (chunk) => appendStreamingContent(chunk),
-        async (completeResponse, reasoning, finishReason) => {
-          const processedContent = applyRegexScripts(completeResponse, enabledScripts, 'output');
+      if (settings?.streamResponses !== false) {
+        await client.streamCompletion(
+          apiMessages,
+          (chunk) => appendStreamingContent(chunk),
+          async (completeResponse, reasoning, finishReason, usage) => {
+            const responseTimeMs = Date.now() - startTime;
+            const processedContent = applyRegexScripts(completeResponse, enabledScripts, 'output');
+
+            // Guard against empty API responses — don't save empty messages
+            if (!processedContent.trim()) {
+              console.warn('API returned empty response');
+              setIsStreaming(false);
+              clearStreamingContent();
+              clearStreamingReasoning();
+
+              // Show an error message so the user knows something went wrong
+              const errorMessage: Message = {
+                id: generateUUID(),
+                role: 'assistant',
+                content: '[Error] The API returned an empty response. Try generating again.',
+                timestamp: Date.now(),
+              };
+              const latestChat = useChatStore.getState().activeChat;
+              const currentMessages = latestChat?.id === chatId ? latestChat.messages : messages;
+              const finalMessages = [...currentMessages, errorMessage];
+              await chatOps.update(chatId, { messages: finalMessages });
+              updateChat(chatId, { messages: finalMessages });
+              return;
+            }
+
+            const assistantMessage: Message = {
+              id: generateUUID(),
+              role: 'assistant',
+              content: processedContent,
+              timestamp: Date.now(),
+              reasoning,
+              responseMeta: usage ? {
+                promptTokens: usage.prompt_tokens,
+                completionTokens: usage.completion_tokens,
+                totalTokens: usage.total_tokens,
+                responseTimeMs,
+                finishReason,
+              } : finishReason ? {
+                responseTimeMs,
+                finishReason,
+              } : { responseTimeMs },
+            };
+
+            // Use latest messages from store to avoid stale closure
+            const latestChat = useChatStore.getState().activeChat;
+            const currentMessages = latestChat?.id === chatId ? latestChat.messages : messages;
+            const finalMessages = [...currentMessages, assistantMessage];
+            await chatOps.update(chatId, { messages: finalMessages });
+            updateChat(chatId, { messages: finalMessages });
+
+            // Background vectorize new message if enabled
+            if (settings?.vectorStoreEnabled) {
+              storeEmbedding(chatId, assistantMessage.id, processedContent).catch(console.error);
+            }
+
+            // Auto-generate a title on the first exchange if none exists yet
+            const userMessages = currentMessages.filter(m => m.role === 'user');
+            if (!activeChat.title && userMessages.length === 1) {
+              generateChatTitle(chatId, userMessages[0].content, processedContent);
+            }
+
+            // Auto-summarize if enabled and threshold reached
+            const interval = settings?.autoSummarizeInterval ?? 20;
+            if (settings?.autoSummarize && interval > 0) {
+              const summaryUpTo = activeChat.summaryUpToIndex ?? 0;
+              const messagesSinceSummary = finalMessages.length - summaryUpTo;
+              if (messagesSinceSummary >= interval) {
+                // Fire-and-forget — don't block chat flow
+                summarizeChat(chatId, finalMessages).catch(console.error);
+              }
+            }
+
+            // Browser notification when tab is hidden
+            if (settings?.notifyOnComplete && document.hidden && Notification.permission === 'granted') {
+              const preview = processedContent.replace(/<[^>]+>/g, '').trim().slice(0, 80);
+              new Notification(character.name, {
+                body: preview || 'Response ready.',
+                icon: character.avatar || undefined,
+              });
+            }
+
+            setIsStreaming(false);
+            clearStreamingContent();
+            clearStreamingReasoning();
+
+            // Auto-continue if the response was truncated by token limit
+            if (finishReason === 'length' && settings?.autoContinue) {
+              setTimeout(() => continueRef.current(), 500);
+            }
+          },
+          (error) => {
+            console.error('API Error:', error);
+            const errorMessage: Message = {
+              id: generateUUID(),
+              role: 'assistant',
+            content: `[Error] Failed to generate response: ${error instanceof Error ? error.message : String(error)}`,
+              timestamp: Date.now(),
+            };
+
+            const latestChat = useChatStore.getState().activeChat;
+            const currentMessages = latestChat?.id === chatId ? latestChat.messages : messages;
+            const finalMessages = [...currentMessages, errorMessage];
+            chatOps.update(chatId, { messages: finalMessages }).catch(console.error);
+            updateChat(chatId, { messages: finalMessages });
+
+            setIsStreaming(false);
+            clearStreamingContent();
+            clearStreamingReasoning();
+          },
+          (reasoningChunk) => appendStreamingReasoning(reasoningChunk),
+        );
+      } else {
+        try {
+          const fullText = await client.complete(apiMessages);
+          const processedContent = applyRegexScripts(fullText, enabledScripts, 'output');
+          const responseTimeMs = Date.now() - startTime;
 
           // Guard against empty API responses — don't save empty messages
           if (!processedContent.trim()) {
@@ -232,7 +445,11 @@ export function useChatGeneration({
             role: 'assistant',
             content: processedContent,
             timestamp: Date.now(),
-            reasoning,
+            reasoning: '',
+            responseMeta: {
+              responseTimeMs,
+              finishReason: 'stop',
+            },
           };
 
           // Use latest messages from store to avoid stale closure
@@ -276,18 +493,12 @@ export function useChatGeneration({
           setIsStreaming(false);
           clearStreamingContent();
           clearStreamingReasoning();
-
-          // Auto-continue if the response was truncated by token limit
-          if (finishReason === 'length' && settings?.autoContinue) {
-            setTimeout(() => continueRef.current(), 500);
-          }
-        },
-        (error) => {
+        } catch (error) {
           console.error('API Error:', error);
           const errorMessage: Message = {
             id: generateUUID(),
             role: 'assistant',
-            content: `[Error] Failed to generate response: ${error.message}`,
+            content: `[Error] Failed to generate response: ${error instanceof Error ? error.message : String(error)}`,
             timestamp: Date.now(),
           };
 
@@ -300,9 +511,8 @@ export function useChatGeneration({
           setIsStreaming(false);
           clearStreamingContent();
           clearStreamingReasoning();
-        },
-        (reasoningChunk) => appendStreamingReasoning(reasoningChunk),
-      );
+        }
+      }
     } catch (error) {
       console.error('Failed to generate:', error);
       setIsStreaming(false);
@@ -312,7 +522,7 @@ export function useChatGeneration({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection, preset, character, activeChat, persona, settings, getEffectivePreset, getEffectiveContextSize, updateChat, setIsStreaming, appendStreamingContent, clearStreamingContent, clearStreamingReasoning, appendStreamingReasoning, generateChatTitle]);
 
-  const regenerateResponse = useCallback(async (messageId: string) => {
+  const regenerateResponse = useCallback(async (messageId: string, statusInfo?: CharacterStatus | null) => {
     if (!activeChat || !connection || !preset || !character) return;
 
     const messageIndex = activeChat.messages.findIndex(m => m.id === messageId);
@@ -337,14 +547,16 @@ export function useChatGeneration({
 
     const chatId = activeChat.id;
     const { apiMessages, enabledScripts } = await buildApiRequest(
-      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, messagesBeforeResponse, settings?.vectorStoreEnabled, settings?.translateLanguage,
+      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, messagesBeforeResponse, settings?.vectorStoreEnabled, settings?.translateLanguage, settings?.responseLength, statusInfo,
     );
 
+    const startTime = Date.now();
     try {
       await client.streamCompletion(
         apiMessages,
         (chunk) => appendStreamingContent(chunk),
-        async (completeResponse, reasoning) => {
+        async (completeResponse, reasoning, finishReason, usage) => {
+          const responseTimeMs = Date.now() - startTime;
           const processedContent = applyRegexScripts(completeResponse, enabledScripts, 'output');
 
           // Guard against empty API responses — don't overwrite with empty content
@@ -361,11 +573,22 @@ export function useChatGeneration({
           // Create new swipes array (no mutation of original)
           const swipes = [...(message.swipes || [message.content]), processedContent];
 
+          const responseMeta = usage ? {
+            promptTokens: usage.prompt_tokens,
+            completionTokens: usage.completion_tokens,
+            totalTokens: usage.total_tokens,
+            responseTimeMs,
+            finishReason,
+          } : finishReason ? {
+            responseTimeMs,
+            finishReason,
+          } : { responseTimeMs };
+
           const latestChat = useChatStore.getState().activeChat;
           const currentMessages = latestChat?.id === chatId ? latestChat.messages : activeChat.messages;
           const updatedMessages = currentMessages.map(msg =>
             msg.id === messageId
-              ? { ...msg, swipes, content: processedContent, reasoning }
+              ? { ...msg, swipes, content: processedContent, reasoning, responseMeta }
               : msg
           );
 
@@ -417,17 +640,46 @@ export function useChatGeneration({
 
     const chatId = activeChat.id;
     const { apiMessages, enabledScripts } = await buildApiRequest(
-      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, activeChat.messages, settings?.vectorStoreEnabled, settings?.translateLanguage,
+      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, activeChat.messages, settings?.vectorStoreEnabled, settings?.translateLanguage, settings?.responseLength,
     );
 
+    // 在 system prompt 末尾追加继续生成指令，确保 AI 以正确角色视角继续
+    if (apiMessages.length > 0 && apiMessages[0].role === 'system') {
+      apiMessages[0] = {
+        ...apiMessages[0],
+        content: apiMessages[0].content + CONTINUE_INSTRUCTION,
+      };
+    }
+
+    const startTime = Date.now();
     try {
       await client.streamCompletion(
         apiMessages,
         (chunk) => appendStreamingContent(chunk),
-        async (completeResponse, reasoning, finishReason) => {
+        async (completeResponse, reasoning, finishReason, usage) => {
+          const responseTimeMs = Date.now() - startTime;
           const processedContent = applyRegexScripts(completeResponse, enabledScripts, 'output');
+
           const latestChat = useChatStore.getState().activeChat;
           const currentMessages = latestChat?.id === chatId ? latestChat.messages : activeChat.messages;
+          const lastMsgMeta = currentMessages[currentMessages.length - 1]?.responseMeta;
+
+          const responseMeta = usage ? {
+            ...lastMsgMeta,
+            promptTokens: (lastMsgMeta?.promptTokens ?? 0) + (usage.prompt_tokens ?? 0),
+            completionTokens: (lastMsgMeta?.completionTokens ?? 0) + (usage.completion_tokens ?? 0),
+            totalTokens: (lastMsgMeta?.totalTokens ?? 0) + (usage.total_tokens ?? 0),
+            responseTimeMs: (lastMsgMeta?.responseTimeMs ?? 0) + responseTimeMs,
+            finishReason,
+          } : finishReason ? {
+            ...(lastMsgMeta ?? {}),
+            responseTimeMs: (lastMsgMeta?.responseTimeMs ?? 0) + responseTimeMs,
+            finishReason,
+          } : {
+            ...(lastMsgMeta ?? {}),
+            responseTimeMs: (lastMsgMeta?.responseTimeMs ?? 0) + responseTimeMs,
+          };
+
           const updatedMessages = currentMessages.map((msg, idx) =>
             idx === currentMessages.length - 1
               ? {
@@ -436,6 +688,7 @@ export function useChatGeneration({
                   reasoning: msg.reasoning
                     ? msg.reasoning + (reasoning || '')
                     : reasoning || undefined,
+                  responseMeta,
                 }
               : msg
           );
@@ -547,7 +800,7 @@ export function useChatGeneration({
 
     const chatId = activeChat.id;
     const { apiMessages } = await buildApiRequest(
-      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, activeChat.messages, undefined, settings?.translateLanguage,
+      character, persona, effectivePreset, getEffectiveContextSize(), activeChat, activeChat.messages, undefined, settings?.translateLanguage, settings?.responseLength,
     );
 
     // Build the impersonation instruction
@@ -559,11 +812,13 @@ export function useChatGeneration({
 
     apiMessages.push({ role: 'system', content: impPrompt });
 
+    const startTime = Date.now();
     try {
       await client.streamCompletion(
         apiMessages,
         (chunk) => appendStreamingContent(chunk),
-        async (completeResponse) => {
+        async (completeResponse, _reasoning, finishReason, usage) => {
+          const responseTimeMs = Date.now() - startTime;
           const trimmed = completeResponse.trim();
           const cb = impersonateCallbackRef.current;
           impersonateCallbackRef.current = null;
@@ -579,6 +834,13 @@ export function useChatGeneration({
                 role: 'user',
                 content: trimmed,
                 timestamp: Date.now(),
+                responseMeta: usage ? {
+                  promptTokens: usage.prompt_tokens,
+                  completionTokens: usage.completion_tokens,
+                  totalTokens: usage.total_tokens,
+                  responseTimeMs,
+                  finishReason,
+                } : { responseTimeMs },
               };
               const latestChat = useChatStore.getState().activeChat;
               const currentMessages = latestChat?.id === chatId ? latestChat.messages : activeChat.messages;
@@ -653,5 +915,6 @@ export function useChatGeneration({
     regeneratingMessageId,
     streamingContent,
     streamingReasoning,
+    getLastPrompt: () => lastPromptRef.current,
   };
 }

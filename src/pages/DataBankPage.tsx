@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import { Upload, Trash2, FileText, Database } from 'lucide-react';
 import { Button } from '../components/ui';
@@ -10,10 +11,13 @@ import type { DataBankDocument } from '../types';
 type ScopeOption = 'global' | 'character' | 'chat';
 
 export function DataBankPage() {
+  const { t } = useTranslation();
   const [documents, setDocuments] = useState<DataBankDocument[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [scope, setScope] = useState<ScopeOption>('global');
   const [isUploading, setIsUploading] = useState(false);
+  const [processingFileName, setProcessingFileName] = useState<string | null>(null);
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -35,12 +39,17 @@ export function DataBankPage() {
     if (!files || files.length === 0) return;
 
     setIsUploading(true);
-    try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+    setUploadErrors([]);
+    setProcessingFileName(null);
+
+    const errors: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setProcessingFileName(file.name);
+      try {
         const content = await readFileContent(file);
         const docId = generateUUID();
-        const chunks = chunkDocument(content, docId);
+        const chunks = await chunkDocument(content, docId);
         const now = Date.now();
 
         const doc: DataBankDocument = {
@@ -55,14 +64,20 @@ export function DataBankPage() {
 
         await dataBankOps.add(doc);
         setDocuments(prev => [doc, ...prev]);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`Failed to upload document "${file.name}":`, error);
+        errors.push(`"${file.name}": ${msg}`);
       }
-    } catch (error) {
-      console.error('Failed to upload document:', error);
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+    }
+
+    if (errors.length > 0) {
+      setUploadErrors(errors);
+    }
+    setIsUploading(false);
+    setProcessingFileName(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
@@ -116,22 +131,22 @@ export function DataBankPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Database className="w-6 h-6 text-parlor-500" />
-            <h1 className="text-2xl sm:text-3xl font-bold text-white font-serif tracking-tight">Data Bank</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold text-white font-serif tracking-tight">{t('databank.title')}</h1>
           </div>
         </div>
 
         {/* Upload Controls */}
         <div className="glass p-4 flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-400">Scope:</label>
+            <label className="text-sm text-gray-400">{t('databank.scopeLabel')}</label>
             <select
               value={scope}
               onChange={(e) => setScope(e.target.value as ScopeOption)}
               className="bg-dark-50 border border-glass-border rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-parlor-500"
             >
-              <option value="global">Global</option>
-              <option value="character">Character</option>
-              <option value="chat">Chat</option>
+              <option value="global">{t('databank.scopeGlobal')}</option>
+              <option value="character">{t('databank.scopeCharacter')}</option>
+              <option value="chat">{t('databank.scopeChat')}</option>
             </select>
           </div>
 
@@ -149,17 +164,35 @@ export function DataBankPage() {
             className="flex items-center gap-2"
           >
             <Upload className="w-4 h-4" />
-            {isUploading ? 'Uploading...' : 'Upload Files'}
+            {isUploading ? t('databank.uploading') : t('databank.uploadFiles')}
           </Button>
-          <span className="text-xs text-gray-500">.txt, .md, .json</span>
+          <span className="text-xs text-gray-500">{t('databank.fileFormats')}</span>
         </div>
+
+        {/* Upload Progress & Errors */}
+        {processingFileName && (
+          <div className="glass p-3 flex items-center gap-3 text-sm text-parlor-300">
+            <div className="animate-spin rounded-full h-4 w-4 border-2 border-parlor-500 border-t-transparent shrink-0" />
+            <span>{t('databank.processingFile', { file: processingFileName })}</span>
+          </div>
+        )}
+        {uploadErrors.length > 0 && (
+          <div className="glass p-3 border border-red-500/30">
+            <p className="text-sm font-medium text-red-400 mb-1">{t('databank.uploadErrors')}</p>
+            <ul className="text-xs text-red-300 space-y-0.5">
+              {uploadErrors.map((err, i) => (
+                <li key={i} className="truncate">{err}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* Document List */}
         {documents.length === 0 ? (
           <div className="glass p-12 text-center">
             <FileText className="w-12 h-12 text-gray-600 mx-auto mb-4" />
             <p className="text-gray-500">
-              No documents uploaded. Upload text or markdown files to use as reference context.
+              {t('databank.emptyDescription')}
             </p>
           </div>
         ) : (
@@ -181,14 +214,14 @@ export function DataBankPage() {
                     </span>
                   </div>
                   <div className="flex items-center gap-3 text-xs text-gray-500">
-                    <span>{doc.chunkCount ?? 0} chunks</span>
+                    <span>{t('databank.chunksCount', { count: doc.chunkCount ?? 0 })}</span>
                     <span>{formatDate(doc.createdAt)}</span>
                   </div>
                 </div>
                 <button
                   onClick={() => handleDelete(doc.id)}
                   className="p-2 text-gray-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-500/10"
-                  title="Delete document"
+                  title={t('databank.deleteDocumentTitle')}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>

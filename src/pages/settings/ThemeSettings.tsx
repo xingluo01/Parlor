@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Palette, Save } from 'lucide-react';
 import { Button } from '../../components/ui';
 import { BUILT_IN_THEMES, applyTheme, getTheme } from '../../utils/themes';
@@ -11,6 +12,7 @@ export function ThemeSettings({
   settings: AppSettings | null;
   onUpdate: (updates: Partial<AppSettings>) => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const [activeTheme, setActiveTheme] = useState<string>('dark');
   const [customTheme, setCustomTheme] = useState<ThemeConfig>({
     name: 'Custom',
@@ -78,13 +80,13 @@ export function ThemeSettings({
     <div>
       <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2 font-serif tracking-tight">
         <Palette className="w-5 h-5" />
-        Theme
+        {t('settings.theme.title')}
       </h2>
 
       <div className="space-y-8">
         {/* Built-in Themes */}
         <div>
-          <h3 className="text-sm font-medium text-gray-300 mb-3">Built-in Themes</h3>
+          <h3 className="text-sm font-medium text-gray-300 mb-3">{t('settings.theme.builtInThemes')}</h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {Object.entries(BUILT_IN_THEMES).map(([key, theme]) => (
               <button
@@ -125,7 +127,7 @@ export function ThemeSettings({
                   <div
                     className="w-4 h-4 rounded-full border border-white/10 ml-auto"
                     style={{ backgroundColor: theme.brandColor }}
-                    title="Brand color"
+                    title={t('settings.theme.brandColor')}
                   />
                 </div>
                 <span className="text-sm font-medium text-white">{theme.name}</span>
@@ -166,7 +168,7 @@ export function ThemeSettings({
                   style={{ backgroundColor: customTheme.brandColor }}
                 />
               </div>
-              <span className="text-sm font-medium text-white">Custom</span>
+              <span className="text-sm font-medium text-white">{t('settings.theme.customTheme')}</span>
             </button>
           </div>
         </div>
@@ -174,10 +176,10 @@ export function ThemeSettings({
         {/* Custom Theme Editor */}
         {activeTheme === 'custom' && (
           <div>
-            <h3 className="text-sm font-medium text-gray-300 mb-3">Custom Colors</h3>
+            <h3 className="text-sm font-medium text-gray-300 mb-3">{t('settings.theme.customColors')}</h3>
             <div className="space-y-3">
               {([
-                { field: 'brandColor' as const, label: 'Brand Color' },
+                { field: 'brandColor' as const, label: t('settings.theme.brandColor') },
                 { field: 'dark50' as const, label: 'Surface (dark-50)' },
                 { field: 'dark100' as const, label: 'Card (dark-100)' },
                 { field: 'dark200' as const, label: 'Background (dark-200)' },
@@ -207,12 +209,12 @@ export function ThemeSettings({
 
         {/* Chat Background */}
         <div>
-          <h3 className="text-sm font-medium text-gray-300 mb-3">Chat Background</h3>
+          <h3 className="text-sm font-medium text-gray-300 mb-3">{t('settings.theme.chatBackground')}</h3>
           <input
             type="text"
             value={chatBackground}
             onChange={(e) => setChatBackground(e.target.value)}
-            placeholder="Image URL (optional)"
+            placeholder={t('settings.theme.bgImageUrlPlaceholder')}
             className="w-full text-sm bg-dark-200 border border-glass-border rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-parlor-500"
           />
           <p className="text-xs text-gray-500 mt-1">
@@ -222,7 +224,7 @@ export function ThemeSettings({
             <div className="mt-2 rounded-lg overflow-hidden border border-glass-border h-24">
               <img
                 src={chatBackground}
-                alt="Chat background preview"
+                alt={t('settings.theme.bgPreviewAlt')}
                 className="w-full h-full object-cover opacity-50"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = 'none';
@@ -240,7 +242,7 @@ export function ThemeSettings({
             disabled={!hasChanges}
           >
             <Save className="w-4 h-4" />
-            {hasChanges ? 'Save Theme' : 'No Changes'}
+            {hasChanges ? t('settings.theme.saveTheme') : t('settings.general.noChanges')}
           </Button>
         </div>
       </div>
