@@ -6,7 +6,6 @@ import type {
   Persona,
   Message,
   LorebookEntry,
-  ReasoningMode,
   AppSettings
 } from '../types';
 import { buildPromptFromPreset, getDepthInjections } from '../utils/presetImport';
@@ -216,7 +215,7 @@ export class APIClient {
   private connection: ConnectionProfile;
   private preset: Preset;
   private abortController: AbortController | null = null;
-  constructor(connection: ConnectionProfile, preset: Preset, settings?: AppSettings) {
+  constructor(connection: ConnectionProfile, preset: Preset, _settings?: AppSettings) {
     this.connection = connection;
     this.preset = preset;
   }

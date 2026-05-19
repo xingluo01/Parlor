@@ -307,7 +307,6 @@ export function PresetModal({
       setStopSequences('');
       setReasoningMode(undefined);
       setReasoningBudgetTokens(8192);
-      setReasoningEffort(undefined);
       setPostPromptProcessing('none');
       setPrompts([]);
       // Reset utility prompts

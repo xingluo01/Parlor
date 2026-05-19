@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Plus, ExternalLink, Edit2, Trash2, Globe,
@@ -64,28 +64,63 @@ const PRESET_LINKS: MarketLink[] = [
   { id: 'mancer', name: 'Mancer', url: 'https://mancer.tech', description: 'Mancer 角色扮演终端平台', isPreset: true },
 ];
 
+// ========== 简单 TTL 缓存 ==========
+const CACHE_TTL = 10 * 60 * 1000; // 10 分钟
+const MAX_CACHE = 100;
+
+function createCache<T>() {
+  const store = new Map<string, { data: T; ts: number }>();
+  return {
+    get(key: string): T | undefined {
+      const entry = store.get(key);
+      if (!entry) return undefined;
+      if (Date.now() - entry.ts > CACHE_TTL) { store.delete(key); return undefined; }
+      return entry.data;
+    },
+    set(key: string, data: T) {
+      if (store.size >= MAX_CACHE) {
+        const oldest = store.keys().next().value;
+        if (oldest) store.delete(oldest);
+      }
+      store.set(key, { data, ts: Date.now() });
+    },
+    clear() { store.clear(); },
+  };
+}
+
+const chubSearchCache = createCache<{ nodes: ChubSearchNode[]; hasMore: boolean }>();
+const chubDetailCache = createCache<any>();
 // ========== Chub API 工具函数 ==========
 
 const CHUB_API = 'https://api.chub.ai';
 
 async function searchChub(query: string, sort = 'star_count', limit = 20, skip = 0) {
+  const cacheKey = `${query}|${sort}|${limit}|${skip}`;
+  const cached = chubSearchCache.get(cacheKey);
+  if (cached) return cached;
   const url = `${CHUB_API}/search?search=${encodeURIComponent(query)}&first=${limit}&skip=${skip}&sort=${sort}&nsfw=true`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Chub search failed: ${res.status}`);
   const data = await res.json();
-  return {
+  const result = {
     nodes: (data.data?.nodes || []) as ChubSearchNode[],
     hasMore: data.data?.pageInfo?.hasNextPage || false,
   };
+  chubSearchCache.set(cacheKey, result);
+  return result;
 }
 
 async function fetchChubCharacter(fullPath: string) {
+  const cached = chubDetailCache.get(fullPath);
+  if (cached) return cached;
   const url = `${CHUB_API}/api/characters/${fullPath}?full=true`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Chub detail fetch failed: ${res.status}`);
   const data = await res.json();
+  chubDetailCache.set(fullPath, data.node);
   return data.node;
 }
+
 
 /** 获取独立知识书详情 */
 async function fetchChubLorebook(lorebookPath: string) {
@@ -230,7 +265,7 @@ export default function CharacterMarketPage() {
   const [searchResults, setSearchResults] = useState<ChubSearchNode[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
-  const [backgroundLoading, setBackgroundLoading] = useState(false); // 后台静默加载中
+  const [backgroundLoading] = useState(false); // 后台静默加载（不再使用）
 
   // 预览状态
   const [previewNode, setPreviewNode] = useState<ChubSearchNode | null>(null);
@@ -240,7 +275,7 @@ export default function CharacterMarketPage() {
   // 标签列表（从搜索结果提取）
   const [availableTopics, setAvailableTopics] = useState<string[]>([]);
   // 分页
-  const PER_PAGE = 50;
+  const PER_PAGE = 48;
   const [searchPage, setSearchPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   // 缓存（搜索关键词变化标记）
@@ -252,12 +287,9 @@ export default function CharacterMarketPage() {
   const [previewVariantIndex, setPreviewVariantIndex] = useState(0);
 
   // 标签折叠状态
-  const [topicsCollapsed, setTopicsCollapsed] = useState(false);
+  const [topicsCollapsed, setTopicsCollapsed] = useState(true);
   // 本地过滤
   const [localFilter, setLocalFilter] = useState('');
-  // 防抖补充搜索
-  const [lastFilterQuery, setLastFilterQuery] = useState('');
-  const supplementTimerRef = useRef<ReturnType<typeof setTimeout>>(null);
 
   // 导入状态
   const [importingId, setImportingId] = useState<string | null>(null);
@@ -332,7 +364,7 @@ export default function CharacterMarketPage() {
 
     try {
       // 首次加载 50 条（快速展示）
-      const FIRST_BATCH = 50;
+      const FIRST_BATCH = PER_PAGE;
       const { nodes, hasMore: more } = await searchChub(query.trim(), searchSort, FIRST_BATCH, 0);
       setSearchResults(nodes);
       setHasMore(more);
@@ -353,15 +385,8 @@ export default function CharacterMarketPage() {
 
       if (nodes.length === 0) setSearchError(t('characterMarket.noResults'));
 
-      // 首次展示完成 → 立即静默加载剩余页面
-      setIsSearching(false);  // 先结束搜索状态
-
-      if (more && query.trim()) {
-        // 不 await，让后台静默加载
-        loadAllRemainingPages(query.trim(), searchSort, FIRST_BATCH);
-      }
-
-      return; // 提前 return，finally 中的 setIsSearching(false) 已在此处执行
+      // 首次展示完成
+      setIsSearching(false);
     } catch {
       setSearchError(t('characterMarket.searchError'));
     } finally {
@@ -370,45 +395,7 @@ export default function CharacterMarketPage() {
   }
 
   /** 静默加载所有剩余页面 */
-  async function loadAllRemainingPages(query: string, sort: string, firstBatchSize: number) {
-    setBackgroundLoading(true);
-    let skip = firstBatchSize;
-    let currentHasMore = true;
-
-    while (currentHasMore) {
-      try {
-        const { nodes, hasMore: more } = await searchChub(query, sort, 50, skip);
-
-        if (nodes.length === 0) break;
-
-        // 追加到搜索结果
-        setSearchResults(prev => [...prev, ...nodes]);
-
-        // 合并新标签
-        setAvailableTopics(prev => {
-          const updated = new Set(prev);
-          nodes.forEach(n => n.topics?.forEach(t => updated.add(t)));
-          return Array.from(updated).sort();
-        });
-
-        // 自动翻译（如果启用）
-        try {
-          const s = await settingsOps.get();
-          if (s?.baiduTranslateMarket && s?.baiduTranslateAppId && s?.baiduTranslateSecretKey) {
-            handleBatchTranslate(nodes, s);
-          }
-        } catch {}
-
-        skip += 50;
-        currentHasMore = more;
-      } catch {
-        break; // 静默失败，不再继续
-      }
-    }
-
-    setBackgroundLoading(false);
-    setHasMore(false); // 全部加载完毕
-  }
+  // loadAllRemainingPages removed — on-demand pagination only
 
   async function handleSearch() {
     await handleSearchWithQuery(searchQuery);
@@ -947,52 +934,13 @@ export default function CharacterMarketPage() {
                   <input
                     type="text"
                     value={localFilter}
-                    onChange={e => {
-                      const val = e.target.value;
-                      setLocalFilter(val);
-
-                      // 当过滤文本变化且有搜索结果时，自动补充搜索
-                      if (val.trim() && searchResults.length > 0 && lastSearchQuery) {
-                        const lowerVal = val.toLowerCase();
-                        const matchCount = searchResults.filter(r =>
-                          r.name.toLowerCase().includes(lowerVal) ||
-                          r.description?.toLowerCase().includes(lowerVal)
-                        ).length;
-
-                        // 如果当前结果中匹配很少（< 3条），且与上次补充搜索文本不同，自动补充搜索
-                        if (matchCount < 3 && val.trim() !== lastFilterQuery) {
-                          setLastFilterQuery(val.trim());
-                          if (supplementTimerRef.current) clearTimeout(supplementTimerRef.current);
-                          supplementTimerRef.current = setTimeout(async () => {
-                            if (!lastSearchQuery || isSearching) return;
-                            try {
-                              const { nodes } = await searchChub(val.trim(), searchSort, 20, 0);
-                              if (nodes.length > 0) {
-                                // 合并到搜索结果中（去重）
-                                setSearchResults(prev => {
-                                  const existingPaths = new Set(prev.map(n => n.fullPath));
-                                  const newNodes = nodes.filter(n => !existingPaths.has(n.fullPath));
-                                  if (newNodes.length === 0) return prev;
-                                  return [...newNodes, ...prev];
-                                });
-                                // 合并标签
-                                setAvailableTopics(prev => {
-                                  const updated = new Set(prev);
-                                  nodes.forEach(n => n.topics?.forEach(t => updated.add(t)));
-                                  return Array.from(updated).sort();
-                                });
-                              }
-                            } catch {}
-                          }, 500);
-                        }
-                      }
-                    }}
+                    onChange={e => setLocalFilter(e.target.value)}
                     placeholder={t('characterMarket.filterPlaceholder') || '过滤当前结果...'}
                     className="w-full pl-8 pr-3 py-1.5 text-[12px] rounded-lg bg-dark-300 border border-glass-border text-gray-200 placeholder-gray-500 focus:outline-none focus:border-parlor-500"
                   />
                   {localFilter && (
                     <button
-                      onClick={() => { setLocalFilter(''); setLastFilterQuery(''); }}
+                      onClick={() => setLocalFilter('')}
                       className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300"
                     >
                       <X size={14} />
